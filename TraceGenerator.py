@@ -5,7 +5,9 @@ Generate synthetic network data.
 
 import numpy as np
 import matplotlib.pyplot as plt
+import random
 from dataclasses import dataclass
+from typing import List
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -28,7 +30,7 @@ class LinkProperties:
     seq_length = 128  # Length of each sequence
 
 @dataclass
-class TraceData:
+class TraceSample:
     pkt_arrival_times_v:np.ndarray
     inter_pkt_times_v:np.ndarray
     pkt_size_v:np.ndarray
@@ -37,11 +39,14 @@ class TraceData:
     capacity_v:np.ndarray
     queue_bytes_v:np.ndarray
     dropped_status:np.ndarray
-    dropped_sizes:np.ndarray
-    dropped_indices:np.ndarray
+    dropped_sizes:List[int]
+    dropped_indices:List[int]
 
 
 class TraceGenerator:
+    seed = 0
+    input_str = ''
+    output_str = ''
     link_properties: LinkProperties = None
     num_training_samples, seq_length_training = 0, 0
     num_val_samples, seq_length_val = 0, 0
@@ -54,63 +59,126 @@ class TraceGenerator:
     val_loader:data.DataLoader = None
     test_loader:data.DataLoader = None
 
-    def __init__(self, link_properties:LinkProperties):
+    def __init__(self, link_properties:LinkProperties, input_str='bscq', output_str='bd', seed=10):
         self.link_properties = link_properties
+        self.seed = seed
+        self.input_str = input_str
+        self.output_str = output_str
+        num_seed = seed
+        torch.manual_seed(num_seed)
+        random.seed(num_seed)
+        np.random.seed(num_seed)
+
+    def reseed(self, seed):
+        self.seed = seed
+        torch.manual_seed(seed)
+        random.seed(seed)
+        np.random.seed(seed)
+
+    def input_size(self):
+        return len(self.input_str)
+
+    def output_size(self):
+        return len(self.output_str)
+
 
     def generate_trace_sample(self, seq_length:int):
         # XXX testing random arrival rates to get more diverse training sequences
-        trace_data = TraceData
         arrival_rate = np.random.uniform(self.link_properties.min_arrival_rate, self.link_properties.max_arrival_rate)
         inter_pkt_time = 1.0 / arrival_rate
-        trace_data.pkt_arrival_times_v = np.cumsum(np.random.exponential(inter_pkt_time, seq_length))
-        trace_data.pkt_size_v = np.rint(
+        pkt_arrival_times_v = np.cumsum(np.random.exponential(inter_pkt_time, seq_length))
+        pkt_size_v = np.rint(
             np.random.uniform(self.link_properties.min_pkt_size, self.link_properties.max_pkt_size, seq_length))  # Packet size between 60 and 1000 bytes
         capacity_s = np.random.uniform(self.link_properties.min_capacity, self.link_properties.max_capacity)
-        trace_data.capacity_v = np.repeat(capacity_s, seq_length)  # Link capacity (bytes per unit time)
+        capacity_v = np.repeat(capacity_s, seq_length)  # Link capacity (bytes per unit time)
         queue_bytes_s = np.rint(np.random.uniform(self.link_properties.min_queue_bytes, self.link_properties.max_queue_bytes))  # size of queue in bytes
-        trace_data.queue_bytes_v = np.repeat(queue_bytes_s, seq_length)
-        trace_data.backlog_v = np.zeros(seq_length)
-        trace_data.latency_v = np.zeros(seq_length)  # Track latency (proportional to backlog)
-        queue = trace_data.pkt_size_v[0]  # Current queue size in bytes
-        trace_data.backlog_v[0] = queue
-        trace_data.latency_v[0] = queue / capacity_s
+        queue_bytes_v = np.repeat(queue_bytes_s, seq_length)
+        backlog_v = np.zeros(seq_length)
+        latency_v = np.zeros(seq_length)  # Track latency (proportional to backlog)
+        queue = pkt_size_v[0]  # Current queue size in bytes
+        backlog_v[0] = queue
+        latency_v[0] = queue / capacity_s
 
-        trace_data.dropped_sizes = []  # Store dropped packet sizes
-        trace_data.dropped_indices = []  # Store the indices of dropped packets
-        trace_data.dropped_status = np.zeros(seq_length, dtype=int)
+        dropped_sizes = []  # Store dropped packet sizes
+        dropped_indices = []  # Store the indices of dropped packets
+        dropped_status = np.zeros(seq_length, dtype=int)
 
         for i in range(1, seq_length):
-            time_passed = trace_data.pkt_arrival_times_v[i] - trace_data.pkt_arrival_times_v[i - 1]  # Time between packets
+            time_passed = pkt_arrival_times_v[i] - pkt_arrival_times_v[i - 1]  # Time between packets
             queue = max(0, queue - time_passed * capacity_s)  # Process queued packets
 
-            if queue + trace_data.pkt_size_v[i] > queue_bytes_s:
-                trace_data.dropped_sizes.append(trace_data.pkt_size_v[i])  # Store the dropped packet size
-                trace_data.dropped_indices.append(i)  # Store the packet index
-                trace_data.dropped_status[i] = 1  # this time step drop or not drop
+            if queue + pkt_size_v[i] > queue_bytes_s:
+                dropped_sizes.append(pkt_size_v[i])  # Store the dropped packet size
+                dropped_indices.append(i)  # Store the packet index
+                dropped_status[i] = 1  # this time step drop or not drop
             else:
-                queue += trace_data.pkt_size_v[i]  # Accept the packet
+                queue += pkt_size_v[i]  # Accept the packet
 
-            trace_data.backlog_v[i] = queue
-            trace_data.latency_v[i] = queue / capacity_s  # Store latency at this time step
+            backlog_v[i] = queue
+            latency_v[i] = queue / capacity_s  # Store latency at this time step
 
-        trace_data.inter_pkt_times_v = np.diff(
-            np.insert(trace_data.pkt_arrival_times_v, 0, 0))  # shouldnt this just give us back the inter_pkt_time_in?
+        inter_pkt_times_v = np.diff(
+            np.insert(pkt_arrival_times_v, 0, 0))  # shouldnt this just give us back the inter_pkt_time_in?
 
-        return trace_data
+        return TraceSample(pkt_arrival_times_v, inter_pkt_times_v, pkt_size_v, backlog_v,
+                            latency_v, capacity_v, queue_bytes_v, dropped_status,
+                            dropped_sizes, dropped_indices)
 
 
-    def generate_trace_data_set(self, seq_length, num_samples):
+    def generate_trace_data_set(self, num_samples, seq_length):
+        """
+        Possible input features:
+        - t = inter-packet times
+        - b = inter-pkt time * capacity
+        - s = packet size
+        - c = capacity
+        - q = queue (bytes)
+        - l = baseline latency (not implemented yet)
+
+        possible output features:
+        - b = backlog
+        - l = latency
+        - d = drop
+        :param num_samples:
+        :param seq_length:
+        :return:
+        """
         dataX= []  # Input sequences
         dataY = []  # Target output values
         self.trace_data = []
 
         for _ in range(num_samples):
             trace_sample = self.generate_trace_sample(seq_length)
-            input_features_v = np.stack((trace_sample.inter_pkt_times_v * trace_sample.capacity_v, trace_sample.pkt_size_v, trace_sample.capacity_v, trace_sample.queue_bytes_v),axis=-1)
-            output_features_v = np.stack((trace_sample.backlog_v, trace_sample.dropped_status), axis=-1)
+            input_features = ()
+            for cc in self.input_str:
+                if cc == 't':
+                    input_features += (trace_sample.inter_pkt_times_v,)
+                elif cc == 'b':
+                    input_features += (trace_sample.inter_pkt_times_v * trace_sample.capacity_v,)
+                elif cc == 's':
+                    input_features += (trace_sample.pkt_size_v,)
+                elif cc == 'c':
+                    input_features += (trace_sample.capacity_v,)
+                elif cc == 'q':
+                    input_features += (trace_sample.queue_bytes_v,)
+                elif cc == 'l':
+                    print(f"WARNING: input feature: {cc} is not yet implemented")
+                else:
+                    print(f"WARNING: input feature: {cc} is not recognized")
 
-            dataX.append(input_features_v)
-            dataY.append(output_features_v)
+            output_features = ()
+            for cc in self.output_str:
+                if cc == 'b':
+                    output_features += (trace_sample.backlog_v,)
+                elif cc == 'l':
+                    output_features += (trace_sample.latency_v,)
+                elif cc == 'd':
+                    output_features += (trace_sample.dropped_status,)
+
+            #input_features_v = np.stack((trace_sample.inter_pkt_times_v * trace_sample.capacity_v, trace_sample.pkt_size_v, trace_sample.capacity_v, trace_sample.queue_bytes_v),axis=-1)
+            #output_features_v = np.stack((trace_sample.backlog_v, trace_sample.dropped_status), axis=-1)
+            dataX.append(np.stack(input_features, axis=-1))
+            dataY.append(np.stack(output_features, axis=-1))
             self.trace_data.append(trace_sample)
 
         dataX_tensor_v = torch.tensor(np.array(dataX), dtype=torch.float32)

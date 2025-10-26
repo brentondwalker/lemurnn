@@ -1,0 +1,438 @@
+from collections import OrderedDict
+from copy import deepcopy
+
+import numpy as np
+import matplotlib.pyplot as plt
+import random
+from dataclasses import dataclass
+from typing import List
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.autograd import Variable
+
+import pytorch_stats_loss as stats_loss
+import torch.utils.data as data
+from torch.utils.data import DataLoader, TensorDataset
+
+from TraceGenerator import TraceGenerator
+
+
+class NonManualRNN(nn.Module):
+    def __init__(self, input_size=4, hidden_size=2, num_layers=1):
+        super(NonManualRNN, self).__init__()
+        self.rnn = nn.RNN(input_size=input_size, hidden_size=hidden_size, num_layers=num_layers,
+                          nonlinearity="relu", batch_first=True)
+
+        # 1 for backlog + 2 or 1?? for dropped classification）
+        self.fc = nn.Linear(in_features=hidden_size, out_features=3)
+
+    def forward(self, x, hidden):
+        out, hidden = self.rnn(x, hidden)
+        combined_out = self.fc(out)
+
+        # split backlog and dropped
+        backlog_out = combined_out[:, :, 0:1]
+        dropped_out = combined_out[:, :, 1:3]
+
+        return backlog_out, dropped_out, hidden
+
+@dataclass
+class TrainingRecord:
+    epoch:int
+    best_model:dict
+    train_loss:float
+    val_loss:float
+    test_loss:float
+    train_loss_details:dict
+    val_loss_details:dict
+    test_loss_details:dict
+
+
+class LatencyPredictor:
+    """
+    A LatencyPredictor is given a packet arrival time and packet size,
+    and predicts its latency and drop status.
+    """
+
+
+
+    device = None
+    hidden_size:int
+    num_layers:int
+    input_size:int
+    output_size:int
+    model:NonManualRNN = None
+    learning_rate:float
+    optimizer:optim.Optimizer = None
+    best_model = None
+    best_model_epoch:int = None
+    best_loss = np.inf
+    trace_generator:TraceGenerator = None
+    epoch = 0
+    training_history:List[TrainingRecord] = []
+
+
+    def __init__(self, hidden_size, num_layers, trace_generator:TraceGenerator, device=None):
+        if device:
+            self.device = device
+        else:
+            self.device = self.get_device()
+        self.epoch = -1
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.trace_generator = trace_generator
+        self.input_size = trace_generator.input_size()
+        self.output_size = trace_generator.output_size()
+        self.model = NonManualRNN(input_size=self.input_size, hidden_size=self.hidden_size).to(self.device)
+        self.best_model = deepcopy(self.model.state_dict())
+        self.best_model_epoch = -1
+
+        #last_best_model = None
+        self.best_loss = np.inf
+
+
+    def get_device(self):
+        # Check if GPU is available
+        if torch.cuda.is_available():
+            device = torch.device("cuda")  # Use the first GPU
+            print("GPU is available.")
+        else:
+            device = torch.device("cpu")  # Use CPU
+            print("Using CPU.")
+        return device
+
+
+    def weight_string(self, weight_dict):
+        weights = [entry for arr in weight_dict.items() for entry in arr[1].cpu().ravel().numpy().tolist()]
+        return "\t".join([str(ww) for ww in weights])
+
+
+    def train(self, learning_rate=0.001, n_epochs=1, loss_file=None):
+        #learning_rate = 0.001
+        # learning_rate = 0.0005
+        optimizer = optim.Adam(self.model.parameters(), lr=learning_rate)
+        criterion_backlog = nn.L1Loss()
+        criterion_dropped = nn.CrossEntropyLoss()
+        testmodel = NonManualRNN(input_size=self.input_size, hidden_size=self.hidden_size).to(self.device)
+
+        for epoch_i in range(n_epochs):
+            self.epoch += 1
+            self.model.train()  # Set to training mode
+            train_loss, train_backlog_loss, train_dropped_loss, train_droprate_loss, train_wasserstein_loss = 0, 0, 0, 0, 0
+            for X_batch, y_batch in self.trace_generator.train_loader:
+                #print(X_batch.shape, y_batch.shape)
+                batch_size, seq_length, _ = X_batch.size()
+                hidden = torch.zeros(1, batch_size, self.hidden_size).to(self.device)  # Move hidden to same device
+
+                X_batch, y_batch = X_batch.to(self.device), y_batch.to(self.device)
+                backlog_pred, dropped_pred, hidden = self.model(X_batch, hidden.to(self.device))  # Forward pass
+                backlog_target = y_batch[:, :, 0].unsqueeze(-1)  # Shape: [batch_size, seq_length, 1]
+                dropped_target = y_batch[:, :, 1].long()  # Shape: [batch_size, seq_length] (for CrossEntropyLoss)
+                dropped_pred_binary = torch.softmax(dropped_pred, dim=2)[:, :, 1]
+                backlog_loss = criterion_backlog(backlog_pred, backlog_target)
+                dropped_loss = criterion_dropped(dropped_pred.view(-1, 2), dropped_target.view(-1))
+                droprate_loss = torch.sum(
+                    torch.abs(torch.sum(y_batch[:, :, 1], dim=1) - torch.sum(dropped_pred_binary, dim=1)))
+                wasserstein_loss = stats_loss.torch_wasserstein_loss(y_batch[:, :, 1], dropped_pred_binary)  # .data
+
+                loss = backlog_loss + dropped_loss + droprate_loss + wasserstein_loss
+                train_loss += loss.item()
+                train_backlog_loss += backlog_loss.item()
+                train_dropped_loss += dropped_loss.item()
+                train_droprate_loss += droprate_loss.item()
+                train_wasserstein_loss += wasserstein_loss.item()
+
+
+                optimizer.zero_grad()  # Zero gradients
+                loss.backward()  # Backpropagation
+                optimizer.step()  # Update parameters
+
+            train_loss_details = {'backlog_loss': train_backlog_loss,
+                                  'dropped_loss': train_dropped_loss,
+                                  'droprate_loss': train_droprate_loss,
+                                  'wasserstein_loss': train_wasserstein_loss}
+
+            # Validation step
+            self.model.eval()
+            val_loss, v_backlog_loss, v_dropped_loss, v_droprate_loss, v_wasserstein_loss = 0, 0, 0, 0, 0
+            with torch.no_grad():
+                for X_val, y_val in self.trace_generator.val_loader:
+                    batch_size_val, _, _ = X_val.size()
+                    hidden = torch.zeros(1, batch_size_val, self.hidden_size).to(self.device)
+
+                    X_val, y_val = X_val.to(self.device), y_val.to(self.device)
+                    backlog_target_val = y_val[:, :, 0].unsqueeze(-1)
+                    dropped_target_val = y_val[:, :, 1].long()
+                    backlog_pred_val, dropped_pred_val, _ = self.model(X_val, hidden)
+                    dropped_pred_val_binary = torch.argmax(dropped_pred_val, dim=2)
+
+                    val_backlog_loss = criterion_backlog(backlog_pred_val, backlog_target_val)
+                    val_dropped_loss = criterion_dropped(dropped_pred_val.view(-1, 2), dropped_target_val.view(-1))
+                    val_droprate_loss = torch.sum(
+                        torch.abs(torch.sum(y_val[:, :, 1], dim=1) - torch.sum(dropped_pred_val_binary, dim=1)))
+                    val_wasserstein_loss = stats_loss.torch_wasserstein_loss(y_val[:, :, 1],
+                                                                             dropped_pred_val_binary).data
+
+                    val_loss += (val_backlog_loss + val_dropped_loss + val_droprate_loss + val_wasserstein_loss).item()
+                    v_backlog_loss += val_backlog_loss.item()
+                    v_dropped_loss += val_dropped_loss.item()
+                    v_droprate_loss += val_droprate_loss.item()
+                    v_wasserstein_loss += val_wasserstein_loss.item()
+
+            num_val_samples = len(self.trace_generator.val_loader)
+            val_loss /= num_val_samples
+            v_backlog_loss /= num_val_samples
+            v_dropped_loss /= num_val_samples
+            v_droprate_loss /= num_val_samples
+            v_wasserstein_loss /= num_val_samples # XXX not done in notebook
+
+            # Check if the current model is the best
+            if val_loss < self.best_loss:
+                print("*!*!*!* Found a new best model: ", self.epoch, val_loss)
+                self.best_loss = val_loss
+                self.best_model = deepcopy(self.model.state_dict())
+                self.best_model_epoch = self.epoch
+
+            val_loss_details = {'backlog_loss': val_backlog_loss,
+                                  'dropped_loss': val_dropped_loss,
+                                  'droprate_loss': val_droprate_loss,
+                                  'wasserstein_loss': val_wasserstein_loss}
+
+            # evaluate against test set using the current best model!!
+            test_loss, t_backlog_loss, t_dropped_loss = 0, 0, 0
+            t_dropped_wa_loss, t_dropped_en_loss, t_dropped_p15_loss = 0, 0, 0
+            t_droprate_loss = 0.0
+            testmodel.load_state_dict(self.best_model)  # Load the current best model
+            testmodel.eval()  # Ensure evaluation mode
+
+            with torch.no_grad():
+                for X_test, y_test in self.trace_generator.test_loader:
+                    batch_size_test, _, _ = X_test.size()
+                    hidden = torch.zeros(1, batch_size_test, self.hidden_size).to(self.device)
+
+                    X_test, y_test = X_test.to(self.device), y_test.to(self.device)
+                    backlog_target_test = y_test[:, :, 0].unsqueeze(-1)
+                    dropped_target_test = y_test[:, :, 1].long()
+
+                    backlog_pred_test, dropped_pred_test, _ = testmodel(X_test, hidden)
+
+                    backlog_loss_test = criterion_backlog(backlog_pred_test, backlog_target_test)
+                    dropped_loss_test = criterion_dropped(dropped_pred_test.view(-1, 2), dropped_target_test.view(-1))
+                    dropped_pred_test_binary = torch.argmax(dropped_pred_test, dim=2)
+
+                    test_loss += (backlog_loss_test + dropped_loss_test).item()
+                    t_backlog_loss += backlog_loss_test.item()
+                    t_dropped_loss += dropped_loss_test.item()
+                    t_dropped_wa_loss += stats_loss.torch_wasserstein_loss(y_test[:, :, 1],
+                                                                           dropped_pred_test_binary).data
+                    t_dropped_en_loss += stats_loss.torch_energy_loss(y_test[:, :, 1], dropped_pred_test_binary).data
+                    t_dropped_p15_loss += stats_loss.torch_cdf_loss(y_test[:, :, 1], dropped_pred_test_binary,
+                                                                    p=1.5).data
+                    t_droprate_loss += torch.sum(torch.abs(
+                        torch.sum(y_test[:, :, 1], dim=1) - torch.sum(dropped_pred_test_binary, dim=1))).item()
+
+            num_test_samples = len(self.trace_generator.test_loader)
+            t_backlog_loss /= num_test_samples
+            t_dropped_loss /= num_test_samples
+            test_loss = t_backlog_loss + t_dropped_loss
+            t_dropped_wa_loss /= num_test_samples
+            t_dropped_en_loss /= num_test_samples
+            t_dropped_p15_loss /= num_test_samples
+            t_droprate_loss /= num_test_samples
+
+            test_loss_details = {'backlog_loss': t_backlog_loss,
+                                 'dropped_loss': t_dropped_loss,
+                                 'droprate_loss': t_droprate_loss,
+                                 'wasserstein_loss': t_dropped_wa_loss}
+
+            print(f"Epoch {self.epoch + 1}: Train: {train_loss:.4f},  Val: {val_loss:.4f} , Test: {test_loss:.4f}")
+            print(f"\tTBLoss: {t_backlog_loss:.4f} , TDLoss: {t_dropped_loss:.4f} , TDWA {t_dropped_wa_loss:.4f} , TDEN: {t_dropped_en_loss:.4f} , TDP15: {t_dropped_p15_loss:.4f}")
+            print(f"\tTDroprateLoss: {t_droprate_loss}")
+
+            # get the current model parameters
+            modelparams_str = self.weight_string(self.best_model)
+            if loss_file:
+                loss_file.write(
+                    f"{self.epoch}\t{train_loss:.4f}\t{val_loss:.4f}\t{test_loss:.4f}\t{self.best_loss:.4f}\t{t_backlog_loss:.4f}\t{t_dropped_loss:.4f}\t{t_dropped_wa_loss:.4f}\t{t_dropped_en_loss:.4f}\t{t_dropped_p15_loss:.4f}\t{t_droprate_loss:.4f}\t{self.best_model_epoch}\t{modelparams_str}\n")
+
+            self.training_history.append(TrainingRecord(self.epoch, self.best_model,
+                train_loss, val_loss, test_loss,
+                train_loss_details, val_loss_details, test_loss_details))
+
+
+    def adropsim(self, s1, s2, drop_radius=0):
+        """
+        Additive drop sequence similarity.
+        This has the linear property: D(s1+s2, s1) = D(s2, 0)
+        """
+        seq_len = len(s1)
+        w1 = np.zeros(seq_len + 2 * drop_radius)
+        w2 = np.zeros(seq_len + 2 * drop_radius)
+        for i in range(seq_len):
+            wi = i + drop_radius
+            if s1[i]:
+                for j in range(-drop_radius, drop_radius + 1):
+                    w1[wi + j] += 1.0 / (2 * drop_radius + 1)
+            if s2[i]:
+                for j in range(-drop_radius, drop_radius + 1):
+                    w2[wi + j] += 1.0 / (2 * drop_radius + 1)
+        ww = w1 - w2
+        result = np.sum(np.abs(ww))
+        return result
+
+
+    def predict_dataset(self, loader, model_dict=None):
+        """
+        Use the current best model, or whatever is passewd in to generate predictions
+        from the input sequences in the loader.
+
+        :param loader:
+        :param model_dict:
+        :return:
+        """
+        eval_model = NonManualRNN(input_size=self.input_size, hidden_size=self.hidden_size).to(self.device)
+
+        if model_dict:
+            eval_model.load_state_dict(model_dict)
+        else:
+            eval_model.load_state_dict(self.best_model)
+
+        eval_model.eval()
+
+        predicted_backlogs = []
+        real_backlogs = []
+        predicted_drops = []
+        real_drops = []
+        predicted_drops_bin = []
+        wa_dist, wasoft_dist, en_dist, ensoft_dist, p15_dist, p15soft_dist = 0,0,0,0,0,0
+
+        with torch.no_grad():
+            for X_test, y_test in loader:
+                X_test, y_test = X_test.to(self.device), y_test.to(self.device)
+                hidden = torch.zeros(1, X_test.size(0), self.hidden_size).to(self.device)
+                backlog_pred_test, dropped_pred_test, _ = eval_model(X_test, hidden)
+                dropped_pred_test_binary = torch.argmax(dropped_pred_test, dim=2)
+                dropped_pred_test_softbinary = torch.softmax(dropped_pred_test, dim=2)
+                BATCH, _ = dropped_pred_test_binary.shape
+                wa_dist += stats_loss.torch_wasserstein_loss(y_test[:, :, 1], dropped_pred_test_binary).data / BATCH
+                wasoft_dist += stats_loss.torch_wasserstein_loss(y_test[:, :, 1], dropped_pred_test_softbinary[:,:,1]).data / BATCH
+                en_dist += stats_loss.torch_energy_loss(y_test[:, :, 1], dropped_pred_test_binary).data / BATCH
+                ensoft_dist += stats_loss.torch_energy_loss(y_test[:, :, 1], dropped_pred_test_softbinary[:,:,1]).data / BATCH
+                p15_dist += stats_loss.torch_cdf_loss(y_test[:, :, 1], dropped_pred_test_binary, p=1.5).data / BATCH
+                p15soft_dist += stats_loss.torch_cdf_loss(y_test[:, :, 1], dropped_pred_test_softbinary[:,:,1], p=1.5).data / BATCH
+
+                predicted_backlogs.append(backlog_pred_test.cpu().numpy())
+                predicted_drops.append(dropped_pred_test.cpu().numpy())
+
+                real_backlogs.append(y_test[:, :, 0].cpu().numpy())
+                real_drops.append(y_test[:, :, 1].cpu().numpy())
+
+        num_batches = len(loader)
+        print("Wasserstein Loss Results: \n",
+        "Wasserstein distance",wa_dist/num_batches,"\n",
+        "Wasserstein softmax distance",wasoft_dist/num_batches,"\n",
+        "Energy distance",en_dist/num_batches,"\n",
+        "Energy softmax distance",ensoft_dist/num_batches,"\n",
+        "p == 1.5 CDF loss",p15_dist/num_batches,"\n",
+        "p == 1.5 CDF softmax loss",p15soft_dist/num_batches,"\n")
+
+        # Convert predictions to numpy arrays
+        predicted_backlogs = np.concatenate(predicted_backlogs, axis=0)
+        real_backlogs = np.concatenate(real_backlogs, axis=0)
+        predicted_drops = np.concatenate(predicted_drops, axis=0)
+        real_drops = np.concatenate(real_drops, axis=0)
+        #print(predicted_drops.shape, real_drops.shape)
+        #print(predicted_drops)
+        return real_backlogs, real_drops, predicted_backlogs, predicted_drops
+
+
+    def prediction_plot(self, real_backlogs, real_drops, predicted_backlogs, predicted_drops, test_index=0):
+        """
+        Given a bunch of predictions, visualize them.
+
+        :param real_backlogs:
+        :param real_drops:
+        :param predicted_backlogs:
+        :param predicted_drops:
+        :param test_index:
+        :return:
+        """
+        # ============ Visualization ============
+        plt.rcParams.update({
+            'font.size': 20,
+            'font.weight': 'bold',
+            'axes.labelsize': 22,
+            'axes.labelweight': 'bold',
+            'axes.titlesize': 22,
+            'axes.linewidth': 2.0,
+            'xtick.labelsize': 15,
+            'ytick.labelsize': 15,
+            'xtick.major.width': 1.8,
+            'ytick.major.width': 1.8,
+            'xtick.major.size': 8,
+            'ytick.major.size': 8,
+            'legend.fontsize': 14,
+            'legend.frameon': True,
+            'lines.linewidth': 2,
+            'pdf.fonttype': 42  # embed TrueType fonts for LaTeX compatibility
+        })
+
+        plt.figure(figsize=(12, 6))
+        plt.plot(real_backlogs[test_index], label="Generated Backlog", color='green', linewidth=2.5, zorder=1)
+        plt.plot(predicted_backlogs[test_index], label="Predicted Backlog", linestyle="dashed", color='red',
+                 linewidth=2.5, zorder=1)
+
+        # Real dropped packet positions
+        drop_indices_real = np.where(real_drops[test_index] == 1)[0]
+        plt.scatter(drop_indices_real, real_backlogs[test_index, drop_indices_real], color='blue', marker='x',
+                    label="Real Dropped Packets", linewidth=2.5, zorder=2)
+
+        # Predicted dropped packet positions
+        drop_indices_pred = np.argmax(predicted_drops[test_index], axis=-1)
+        drop_indices_pred = np.where(drop_indices_pred == 1)[0]
+        plt.scatter(drop_indices_pred, predicted_backlogs[test_index, drop_indices_pred], color='orange', marker='o',
+                    label="Predicted Dropped Packets", linewidth=2, zorder=2)
+
+        plt.xlabel("Time Step", fontsize=18)
+        plt.ylabel("Backlog (bits)", fontsize=18)
+        # plt.title("Generated vs Predicted Backlog and Dropped Packets")
+        plt.legend()
+        plt.grid()
+        plt.savefig("RealvsPreBD_toobusy_new.pdf", format='pdf')
+        plt.show()
+
+        # ============ Drop Position Match Accuracy ============ #
+        # Get sets of real and predicted dropped positions
+        pred_dropped_status = np.argmax(predicted_drops[test_index], axis=-1)
+        real_dropped_status = real_drops[test_index].astype(int)
+
+        pred_indices = set(np.where(pred_dropped_status == 1)[0])
+        real_indices = set(np.where(real_dropped_status == 1)[0])
+        matched = pred_indices & real_indices
+
+        correct = len(matched)
+        total = len(real_indices)
+        accuracy = correct / total * 100 if total > 0 else 0.0
+
+        print(f"Drop position match accuracy (example {test_index}): {accuracy:.2f}% ({correct}/{total})")
+        print("Ground truth dropped positions:", sorted(real_indices))
+        print("Predicted dropped positions:", sorted(pred_indices))
+        print("Correctly predicted positions:", sorted(matched))
+        print(f"Number of drops:  real={len(pred_indices)}  predicted={len(real_indices)}")
+        print(f"adropsim(0) = {self.adropsim(pred_dropped_status, real_dropped_status, 0)}")
+        print(f"adropsim(1) = {self.adropsim(pred_dropped_status, real_dropped_status, 1)}")
+        print(f"adropsim(2) = {self.adropsim(pred_dropped_status, real_dropped_status, 2)}")
+        print(f"adropsim(4) = {self.adropsim(pred_dropped_status, real_dropped_status, 4)}")
+        print(f"adropsim(8) = {self.adropsim(pred_dropped_status, real_dropped_status, 8)}")
+        print(f"adropsim(16) = {self.adropsim(pred_dropped_status, real_dropped_status, 16)}")
+
+        tensor_w1 = Variable(torch.from_numpy(real_dropped_status.astype(dtype=np.float64)))
+        tensor_w2 = Variable(torch.from_numpy(pred_dropped_status.astype(dtype=np.float64)), requires_grad=True)
+        print("\n\nWasserstein Results:")
+        print("Wasserstein loss", stats_loss.torch_wasserstein_loss(tensor_w1, tensor_w2).data,
+              stats_loss.torch_wasserstein_loss(tensor_w1, tensor_w2).requires_grad)
+        print("Energy loss", stats_loss.torch_energy_loss(tensor_w1, tensor_w2).data,
+              stats_loss.torch_wasserstein_loss(tensor_w1, tensor_w2).requires_grad)
+        print("p == 1.5 CDF loss", stats_loss.torch_cdf_loss(tensor_w1, tensor_w2, p=1.5).data)
+        print("Validate Checking Errors:", stats_loss.torch_validate_distibution(tensor_w1, tensor_w2))
