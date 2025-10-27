@@ -95,7 +95,7 @@ class LatencyPredictor:
         #last_best_model = None
         self.best_loss = np.inf
         self.set_data_directory(os.getcwd())
-        self.set_training_directory()
+        self.set_training_directory(create=True)
         self.save_link_properties()
         self.save_dataset_properties()
 
@@ -467,8 +467,12 @@ class LatencyPredictor:
             'pdf.fonttype': 42  # embed TrueType fonts for LaTeX compatibility
         })
         print(f"prediction_plot() : print_stats={print_stats}")
+        print(f"prediction_plot() : display_plot={display_plot}")
 
         true_backlog, true_drops, predicted_backlog, predicted_drops = self.predict_sample(test_index=test_index, data_set_name=data_set_name, print_stats=print_stats)
+
+        # turn off interactive mode so plots don't display until we call plt.show()
+        plt.ioff()
 
         plt.figure(figsize=(12, 6))
         plt.plot(true_backlog, label="Generated Backlog", color='green', linewidth=2.5, zorder=1)
@@ -500,18 +504,16 @@ class LatencyPredictor:
         # ============ Drop Position Match Accuracy ============ #
         # Get sets of real and predicted dropped positions
         #pred_dropped_status = np.argmax(predicted_drops, axis=-1)
-        pred_dropped_status = predicted_drops.astype(int)
-        real_dropped_status = true_drops.astype(int)
-
-        pred_indices = set(np.where(pred_dropped_status == 1)[0])
-        real_indices = set(np.where(real_dropped_status == 1)[0])
-        matched = pred_indices & real_indices
-
-        correct = len(matched)
-        total = len(real_indices)
-        accuracy = correct / total * 100 if total > 0 else 0.0
-
         if print_stats:
+            pred_dropped_status = predicted_drops.astype(int)
+            real_dropped_status = true_drops.astype(int)
+            pred_indices = set(np.where(pred_dropped_status == 1)[0])
+            real_indices = set(np.where(real_dropped_status == 1)[0])
+            matched = pred_indices & real_indices
+            correct = len(matched)
+            total = len(real_indices)
+            accuracy = correct / total * 100 if total > 0 else 0.0
+
             print(f"Drop position match accuracy (example {test_index}): {accuracy:.2f}% ({correct}/{total})")
             print("Ground truth dropped positions:", sorted(real_indices))
             print("Predicted dropped positions:", sorted(pred_indices))
