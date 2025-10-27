@@ -1,6 +1,9 @@
+import dataclasses
+import json
+import time
 from collections import OrderedDict
 from copy import deepcopy
-
+import os
 import numpy as np
 import matplotlib.pyplot as plt
 import random
@@ -40,7 +43,7 @@ class NonManualRNN(nn.Module):
 @dataclass
 class TrainingRecord:
     epoch:int
-    best_model:dict
+    best_model:str
     train_loss:float
     val_loss:float
     test_loss:float
@@ -55,9 +58,8 @@ class LatencyPredictor:
     and predicts its latency and drop status.
     """
 
-
-
     device = None
+    model_type = "rnn"
     hidden_size:int
     num_layers:int
     input_size:int
@@ -66,12 +68,14 @@ class LatencyPredictor:
     learning_rate:float
     optimizer:optim.Optimizer = None
     best_model = None
+    best_model_file:str = None
     best_model_epoch:int = None
     best_loss = np.inf
     trace_generator:TraceGenerator = None
     epoch = 0
     training_history:List[TrainingRecord] = []
-
+    data_directory = None
+    training_directory = None
 
     def __init__(self, hidden_size, num_layers, trace_generator:TraceGenerator, device=None):
         if device:
@@ -90,7 +94,48 @@ class LatencyPredictor:
 
         #last_best_model = None
         self.best_loss = np.inf
+        self.set_data_directory(os.getcwd())
+        self.set_training_directory()
+        self.save_link_properties()
+        self.save_dataset_properties()
 
+    def save_dataset_properties(self):
+        dataset_properties_filename = f"{self.training_directory}/dataset-properties.json"
+        with open(dataset_properties_filename, "w") as dataset_properties_file:
+                dataset_properties_file.write(f"{self.trace_generator.num_training_samples}\n")
+                dataset_properties_file.write(f"{self.trace_generator.seq_length_training}\n")
+                dataset_properties_file.write(f"{self.trace_generator.num_val_samples}\n")
+                dataset_properties_file.write(f"{self.trace_generator.seq_length_val}\n")
+                dataset_properties_file.write(f"{self.trace_generator.num_test_samples}\n")
+                dataset_properties_file.write(f"{self.trace_generator.seq_length_test}\n")
+
+
+    def save_link_properties(self):
+        link_properties_filename = f"{self.training_directory}/link-properties.json"
+        with open(link_properties_filename, "w") as link_properties_file:
+                link_properties_file.write(json.dumps(dataclasses.asdict(self.trace_generator.link_properties)))
+                link_properties_file.write("\n")
+                link_properties_file
+
+    def set_data_directory(self, path):
+        if os.path.isdir(path):
+            self.data_directory = path
+        else:
+            print(f"ERROR: directory does not exist: {path}")
+
+    def set_training_directory(self, path=None, create=False):
+        if path:
+            if os.path.isdir(path) or create:
+                self.training_directory = path
+            else:
+                print(f"ERROR: training directory does not exist: {path}")
+        elif not self.training_directory:
+                self.training_directory = f"{self.data_directory}/model-training/model-{self.model_type}-layers{self.num_layers}_hidden{self.hidden_size}-{int(time.time())}"
+        if create:
+            if os.path.isdir(self.training_directory):
+                print(f"WARNING: training dir already exists: {self.training_directory}")
+            else:
+                os.makedirs(self.training_directory, exist_ok=True)
 
     def get_device(self):
         # Check if GPU is available
@@ -108,16 +153,37 @@ class LatencyPredictor:
         return "\t".join([str(ww) for ww in weights])
 
 
-    def train(self, learning_rate=0.001, n_epochs=1, loss_file=None):
-        #learning_rate = 0.001
-        # learning_rate = 0.0005
+    def save_model_state(self, epoch, model, optimizer):
+        """
+        To load it again:
+        state = torch.load(filepath)
+        model.load_state_dict(state['state_dict'])
+        optimizer.load_state_dict(state['optimizer'])
+        https://stackoverflow.com/questions/42703500/how-do-i-save-a-trained-model-in-pytorch
+        """
+        state = {
+            'epoch': epoch,
+            'state_dict': model.state_dict(),
+            'optimizer': optimizer.state_dict(),
+            }
+        filepath = f"{self.training_directory}/modelstate-{epoch}.json"
+        torch.save(state, filepath)
+
+
+    def train(self, learning_rate=0.001, n_epochs=1, loss_file=None, compute_ads_loss=False):
+        self.set_training_directory(create=True)
+        training_log_filename = f"{self.training_directory}/training_log.dat"
+        training_history_filename = f"{self.training_directory}/training_history.json"
+
         optimizer = optim.Adam(self.model.parameters(), lr=learning_rate)
         criterion_backlog = nn.L1Loss()
         criterion_dropped = nn.CrossEntropyLoss()
         testmodel = NonManualRNN(input_size=self.input_size, hidden_size=self.hidden_size).to(self.device)
+        ads_loss = {0: 0, 1: 0, 2: 0, 4: 0, 8: 0, 16: 0}
 
         for epoch_i in range(n_epochs):
             self.epoch += 1
+            new_best_model = False
             self.model.train()  # Set to training mode
             train_loss, train_backlog_loss, train_dropped_loss, train_droprate_loss, train_wasserstein_loss = 0, 0, 0, 0, 0
             for X_batch, y_batch in self.trace_generator.train_loader:
@@ -148,6 +214,12 @@ class LatencyPredictor:
                 loss.backward()  # Backpropagation
                 optimizer.step()  # Update parameters
 
+            num_train_samples = len(self.trace_generator.train_loader) * batch_size
+            train_backlog_loss /= num_train_samples
+            train_dropped_loss /= num_train_samples
+            train_droprate_loss /= num_train_samples
+            train_wasserstein_loss /= num_train_samples
+
             train_loss_details = {'backlog_loss': train_backlog_loss,
                                   'dropped_loss': train_dropped_loss,
                                   'droprate_loss': train_droprate_loss,
@@ -172,7 +244,7 @@ class LatencyPredictor:
                     val_droprate_loss = torch.sum(
                         torch.abs(torch.sum(y_val[:, :, 1], dim=1) - torch.sum(dropped_pred_val_binary, dim=1)))
                     val_wasserstein_loss = stats_loss.torch_wasserstein_loss(y_val[:, :, 1],
-                                                                             dropped_pred_val_binary).data
+                                                                             dropped_pred_val_binary)  #.data
 
                     val_loss += (val_backlog_loss + val_dropped_loss + val_droprate_loss + val_wasserstein_loss).item()
                     v_backlog_loss += val_backlog_loss.item()
@@ -180,7 +252,7 @@ class LatencyPredictor:
                     v_droprate_loss += val_droprate_loss.item()
                     v_wasserstein_loss += val_wasserstein_loss.item()
 
-            num_val_samples = len(self.trace_generator.val_loader)
+            num_val_samples = len(self.trace_generator.val_loader) * batch_size_val
             val_loss /= num_val_samples
             v_backlog_loss /= num_val_samples
             v_dropped_loss /= num_val_samples
@@ -193,16 +265,20 @@ class LatencyPredictor:
                 self.best_loss = val_loss
                 self.best_model = deepcopy(self.model.state_dict())
                 self.best_model_epoch = self.epoch
+                self.save_model_state(self.epoch, self.model, optimizer)
+                new_best_model = True
 
-            val_loss_details = {'backlog_loss': val_backlog_loss,
-                                  'dropped_loss': val_dropped_loss,
-                                  'droprate_loss': val_droprate_loss,
-                                  'wasserstein_loss': val_wasserstein_loss}
+            val_loss_details = {'backlog_loss': v_backlog_loss,
+                                  'dropped_loss': v_dropped_loss,
+                                  'droprate_loss': v_droprate_loss,
+                                  'wasserstein_loss': v_wasserstein_loss}
 
             # evaluate against test set using the current best model!!
-            test_loss, t_backlog_loss, t_dropped_loss = 0, 0, 0
+            test_loss, t_backlog_loss, t_backlog_loss_n, t_dropped_loss = 0, 0, 0, 0
             t_dropped_wa_loss, t_dropped_en_loss, t_dropped_p15_loss = 0, 0, 0
             t_droprate_loss = 0.0
+            if new_best_model:
+                ads_loss = {0: 0, 1: 0, 2: 0, 4: 0, 8: 0, 16: 0}
             testmodel.load_state_dict(self.best_model)  # Load the current best model
             testmodel.eval()  # Ensure evaluation mode
 
@@ -218,47 +294,76 @@ class LatencyPredictor:
                     backlog_pred_test, dropped_pred_test, _ = testmodel(X_test, hidden)
 
                     backlog_loss_test = criterion_backlog(backlog_pred_test, backlog_target_test)
+                    # index of capacity input is currently 2
+                    backlog_loss_test_n = criterion_backlog(backlog_pred_test/X_test[:,:,2].unsqueeze(dim=-1), backlog_target_test/X_test[:,:,2].unsqueeze(dim=-1))
                     dropped_loss_test = criterion_dropped(dropped_pred_test.view(-1, 2), dropped_target_test.view(-1))
                     dropped_pred_test_binary = torch.argmax(dropped_pred_test, dim=2)
 
                     test_loss += (backlog_loss_test + dropped_loss_test).item()
                     t_backlog_loss += backlog_loss_test.item()
+                    t_backlog_loss_n += backlog_loss_test_n.item()
                     t_dropped_loss += dropped_loss_test.item()
                     t_dropped_wa_loss += stats_loss.torch_wasserstein_loss(y_test[:, :, 1],
-                                                                           dropped_pred_test_binary).data
-                    t_dropped_en_loss += stats_loss.torch_energy_loss(y_test[:, :, 1], dropped_pred_test_binary).data
+                                                                           dropped_pred_test_binary).item()  #.data
+                    t_dropped_en_loss += stats_loss.torch_energy_loss(y_test[:, :, 1], dropped_pred_test_binary).item()  #.data
                     t_dropped_p15_loss += stats_loss.torch_cdf_loss(y_test[:, :, 1], dropped_pred_test_binary,
-                                                                    p=1.5).data
+                                                                    p=1.5).item()  #.data
                     t_droprate_loss += torch.sum(torch.abs(
                         torch.sum(y_test[:, :, 1], dim=1) - torch.sum(dropped_pred_test_binary, dim=1))).item()
+                    #print(dropped_pred_test_binary.shape, y_test[0, :, 1].shape)
+                    if new_best_model and compute_ads_loss:
+                        # Be frugal with this, because I have not parallelized it.
+                        # It is super slow.
+                        for i in range(batch_size_test):
+                            ads_loss[0] += self.adropsim(dropped_pred_test_binary[i,:], y_test[i, :, 1], 0)
+                            radius = 1
+                            for p in range(5):
+                                ads_loss[radius] += self.adropsim(dropped_pred_test_binary[i,:], y_test[i, :, 1], radius)
+                                radius *= 2
+                            #print(f"{self.epoch}.{i}\t{ads_loss}")
 
-            num_test_samples = len(self.trace_generator.test_loader)
+            num_test_samples = len(self.trace_generator.test_loader) * batch_size_test
             t_backlog_loss /= num_test_samples
+            t_backlog_loss_n /= num_test_samples
             t_dropped_loss /= num_test_samples
-            test_loss = t_backlog_loss + t_dropped_loss
             t_dropped_wa_loss /= num_test_samples
             t_dropped_en_loss /= num_test_samples
             t_dropped_p15_loss /= num_test_samples
             t_droprate_loss /= num_test_samples
+            test_loss = t_backlog_loss + t_dropped_loss + t_droprate_loss + t_dropped_wa_loss
+            if new_best_model:
+                self.prediction_plot(test_index=0, data_set_name='test', display_plot=False, save_plot=True, print_stats=False, file_suffix=f"_epoch{self.epoch}")
+            if new_best_model and compute_ads_loss:
+                ads_loss[0] /= num_test_samples
+                radius = 1
+                for p in range(5):
+                    ads_loss[radius] /= num_test_samples
+                    radius *= 2
+            ads_str = "\t".join(f"{x:.4f}" for x in (ads_loss[0], ads_loss[1], ads_loss[2], ads_loss[4], ads_loss[8], ads_loss[16]))
 
             test_loss_details = {'backlog_loss': t_backlog_loss,
+                                 'backlog_loss_n': t_backlog_loss_n,
                                  'dropped_loss': t_dropped_loss,
                                  'droprate_loss': t_droprate_loss,
-                                 'wasserstein_loss': t_dropped_wa_loss}
+                                 'wasserstein_loss': t_dropped_wa_loss,
+                                 'ads_loss': ads_loss}
 
-            print(f"Epoch {self.epoch + 1}: Train: {train_loss:.4f},  Val: {val_loss:.4f} , Test: {test_loss:.4f}")
-            print(f"\tTBLoss: {t_backlog_loss:.4f} , TDLoss: {t_dropped_loss:.4f} , TDWA {t_dropped_wa_loss:.4f} , TDEN: {t_dropped_en_loss:.4f} , TDP15: {t_dropped_p15_loss:.4f}")
+            print(f"Epoch {self.epoch + 1}: Train: {train_loss:.4f} , Val: {val_loss:.4f} , Test: {test_loss:.4f}")
+            print(f"\tTBLoss: {t_backlog_loss:.4f}, TBLossN: {t_backlog_loss_n:.4f}, TDLoss: {t_dropped_loss:.4f} , TDWA {t_dropped_wa_loss:.4f} , TDEN: {t_dropped_en_loss:.4f} , TDP15: {t_dropped_p15_loss:.4f}")
+            print(f"\tTADSLoss: {ads_str}")
             print(f"\tTDroprateLoss: {t_droprate_loss}")
 
             # get the current model parameters
-            modelparams_str = self.weight_string(self.best_model)
-            if loss_file:
+            with open(training_log_filename, "a", buffering=1) as loss_file:
                 loss_file.write(
-                    f"{self.epoch}\t{train_loss:.4f}\t{val_loss:.4f}\t{test_loss:.4f}\t{self.best_loss:.4f}\t{t_backlog_loss:.4f}\t{t_dropped_loss:.4f}\t{t_dropped_wa_loss:.4f}\t{t_dropped_en_loss:.4f}\t{t_dropped_p15_loss:.4f}\t{t_droprate_loss:.4f}\t{self.best_model_epoch}\t{modelparams_str}\n")
+                    f"{self.epoch}\t{train_loss:.4f}\t{val_loss:.4f}\t{test_loss:.4f}\t{self.best_loss:.4f}\t{t_backlog_loss:.4f}\t{t_backlog_loss_n:.4f}\t{t_dropped_loss:.4f}\t{t_dropped_wa_loss:.4f}\t{t_dropped_en_loss:.4f}\t{t_dropped_p15_loss:.4f}\t{t_droprate_loss:.4f}\t{ads_str}\t{self.best_model_epoch}\n")
 
-            self.training_history.append(TrainingRecord(self.epoch, self.best_model,
+            self.training_history.append(TrainingRecord(self.epoch, self.best_model_file,
                 train_loss, val_loss, test_loss,
                 train_loss_details, val_loss_details, test_loss_details))
+            with open(training_history_filename, "a", buffering=1) as history_file:
+                history_file.write(json.dumps(dataclasses.asdict(self.training_history[-1])))
+                history_file.write("\n")
 
 
     def adropsim(self, s1, s2, drop_radius=0):
@@ -282,7 +387,156 @@ class LatencyPredictor:
         return result
 
 
-    def predict_dataset(self, loader, model_dict=None):
+    def predict_sample(self, model_dict=None, test_index=0, data_set_name='test', print_stats=True):
+        """
+        Use the current best model, or whatever is passed in, to generate predictions
+        from a single sample (of the test set).
+
+        :param model_dict:
+        :param test_index:
+        :return:
+        """
+        print(f"predict_sample() : print_stats={print_stats}")
+
+        # first retrieve the data for this test_index
+        input_features, output_features = self.trace_generator.get_sample(test_index=test_index, data_set_name=data_set_name)
+        dataX  = torch.tensor(input_features, dtype=torch.float32).unsqueeze(dim=0)
+        dataY = torch.tensor(output_features, dtype=torch.float32).unsqueeze(dim=0)
+
+        # allocate a model to use for eval
+        eval_model = NonManualRNN(input_size=self.input_size, hidden_size=self.hidden_size)  #.to(self.device)
+        if model_dict:
+            eval_model.load_state_dict(model_dict)
+        else:
+            eval_model.load_state_dict(self.best_model)
+        eval_model.eval()
+
+        wa_dist, wasoft_dist, en_dist, ensoft_dist, p15_dist, p15soft_dist = 0,0,0,0,0,0
+
+        with torch.no_grad():
+            hidden = torch.zeros(1, dataX.size(0), self.hidden_size)  #.to(self.device)
+            backlog_pred, dropped_pred, _ = eval_model(dataX, hidden)
+            dropped_pred_binary = torch.argmax(dropped_pred, dim=2)
+            dropped_pred_softbinary = torch.softmax(dropped_pred, dim=2)
+
+            if print_stats:
+                wa_dist += stats_loss.torch_wasserstein_loss(dataY[:, :, 1], dropped_pred_binary).data
+                wasoft_dist += stats_loss.torch_wasserstein_loss(dataY[:, :, 1], dropped_pred_softbinary[:,:,1]).data
+                en_dist += stats_loss.torch_energy_loss(dataY[:, :, 1], dropped_pred_binary).data
+                ensoft_dist += stats_loss.torch_energy_loss(dataY[:, :, 1], dropped_pred_softbinary[:,:,1]).data
+                p15_dist += stats_loss.torch_cdf_loss(dataY[:, :, 1], dropped_pred_binary, p=1.5).data
+                p15soft_dist += stats_loss.torch_cdf_loss(dataY[:, :, 1], dropped_pred_softbinary[:,:,1], p=1.5).data
+
+        if print_stats:
+            print("Wasserstein Loss Results: \n",
+            "Wasserstein distance",wa_dist,"\n",
+            "Wasserstein softmax distance",wasoft_dist,"\n",
+            "Energy distance",en_dist,"\n",
+            "Energy softmax distance",ensoft_dist,"\n",
+            "p == 1.5 CDF loss",p15_dist,"\n",
+            "p == 1.5 CDF softmax loss",p15soft_dist,"\n")
+
+        return dataY[:, :, 0].squeeze().numpy(), dataY[:,:,1].squeeze().numpy(), backlog_pred.squeeze().numpy(), dropped_pred_binary.squeeze().numpy()
+
+
+    def prediction_plot(self, test_index=0, data_set_name='test', display_plot=True, save_plot=True, print_stats=True, file_suffix=""):
+        """
+        Given a bunch of predictions, visualize them.
+
+        :param test_index:
+        :param data_set_name:
+        :return:
+        """
+        # ============ Visualization ============
+        plt.rcParams.update({
+            'font.size': 20,
+            'font.weight': 'bold',
+            'axes.labelsize': 22,
+            'axes.labelweight': 'bold',
+            'axes.titlesize': 22,
+            'axes.linewidth': 2.0,
+            'xtick.labelsize': 15,
+            'ytick.labelsize': 15,
+            'xtick.major.width': 1.8,
+            'ytick.major.width': 1.8,
+            'xtick.major.size': 8,
+            'ytick.major.size': 8,
+            'legend.fontsize': 14,
+            'legend.frameon': True,
+            'lines.linewidth': 2,
+            'pdf.fonttype': 42  # embed TrueType fonts for LaTeX compatibility
+        })
+        print(f"prediction_plot() : print_stats={print_stats}")
+
+        true_backlog, true_drops, predicted_backlog, predicted_drops = self.predict_sample(test_index=test_index, data_set_name=data_set_name, print_stats=print_stats)
+
+        plt.figure(figsize=(12, 6))
+        plt.plot(true_backlog, label="Generated Backlog", color='green', linewidth=2.5, zorder=1)
+        plt.plot(predicted_backlog, label="Predicted Backlog", linestyle="dashed", color='red', linewidth=2.5, zorder=1)
+
+        # Real dropped packet positions
+        drop_indices_real = np.where(true_drops == 1)[0]
+        plt.scatter(drop_indices_real, true_backlog[drop_indices_real], color='blue', marker='x',
+                    label="Real Dropped Packets", linewidth=2.5, zorder=2)
+
+        # Predicted dropped packet positions
+        #drop_indices_pred = np.argmax(predicted_drops, axis=-1)
+        #drop_indices_pred = np.where(drop_indices_pred == 1)[0]
+        drop_indices_pred = np.where(predicted_drops == 1)[0]
+        plt.scatter(drop_indices_pred, predicted_backlog[drop_indices_pred], color='orange', marker='o',
+                    label="Predicted Dropped Packets", linewidth=2, zorder=2)
+
+        plt.xlabel("Time Step", fontsize=18)
+        plt.ylabel("Backlog (bits)", fontsize=18)
+        # plt.title("Generated vs Predicted Backlog and Dropped Packets")
+        plt.legend()
+        plt.grid()
+        if save_plot:
+            plt.savefig(f"{self.training_directory}/BD_plot_{data_set_name}_sample{test_index}{file_suffix}.pdf", format='pdf')
+            plt.savefig(f"{self.training_directory}/BD_plot_{data_set_name}_sample{test_index}{file_suffix}.png", format='png')
+        if display_plot:
+            plt.show()
+
+        # ============ Drop Position Match Accuracy ============ #
+        # Get sets of real and predicted dropped positions
+        #pred_dropped_status = np.argmax(predicted_drops, axis=-1)
+        pred_dropped_status = predicted_drops.astype(int)
+        real_dropped_status = true_drops.astype(int)
+
+        pred_indices = set(np.where(pred_dropped_status == 1)[0])
+        real_indices = set(np.where(real_dropped_status == 1)[0])
+        matched = pred_indices & real_indices
+
+        correct = len(matched)
+        total = len(real_indices)
+        accuracy = correct / total * 100 if total > 0 else 0.0
+
+        if print_stats:
+            print(f"Drop position match accuracy (example {test_index}): {accuracy:.2f}% ({correct}/{total})")
+            print("Ground truth dropped positions:", sorted(real_indices))
+            print("Predicted dropped positions:", sorted(pred_indices))
+            print("Correctly predicted positions:", sorted(matched))
+            print(f"Number of drops:  real={len(pred_indices)}  predicted={len(real_indices)}")
+            print(f"adropsim(0) = {self.adropsim(pred_dropped_status, real_dropped_status, 0)}")
+            print(f"adropsim(1) = {self.adropsim(pred_dropped_status, real_dropped_status, 1)}")
+            print(f"adropsim(2) = {self.adropsim(pred_dropped_status, real_dropped_status, 2)}")
+            print(f"adropsim(4) = {self.adropsim(pred_dropped_status, real_dropped_status, 4)}")
+            print(f"adropsim(8) = {self.adropsim(pred_dropped_status, real_dropped_status, 8)}")
+            print(f"adropsim(16) = {self.adropsim(pred_dropped_status, real_dropped_status, 16)}")
+
+            tensor_w1 = Variable(torch.from_numpy(real_dropped_status.astype(dtype=np.float64)))
+            tensor_w2 = Variable(torch.from_numpy(pred_dropped_status.astype(dtype=np.float64)))
+            print("\n\nWasserstein Results:")
+            print("Wasserstein loss", stats_loss.torch_wasserstein_loss(tensor_w1, tensor_w2).data,
+                  stats_loss.torch_wasserstein_loss(tensor_w1, tensor_w2).requires_grad)
+            print("Energy loss", stats_loss.torch_energy_loss(tensor_w1, tensor_w2).data,
+                  stats_loss.torch_wasserstein_loss(tensor_w1, tensor_w2).requires_grad)
+            print("p == 1.5 CDF loss", stats_loss.torch_cdf_loss(tensor_w1, tensor_w2, p=1.5).data)
+            print("Validate Checking Errors:", stats_loss.torch_validate_distibution(tensor_w1, tensor_w2))
+
+
+
+    def predict_dataset(self, loader, model_dict=None, print_stats=True):
         """
         Use the current best model, or whatever is passewd in to generate predictions
         from the input sequences in the loader.
@@ -329,13 +583,14 @@ class LatencyPredictor:
                 real_drops.append(y_test[:, :, 1].cpu().numpy())
 
         num_batches = len(loader)
-        print("Wasserstein Loss Results: \n",
-        "Wasserstein distance",wa_dist/num_batches,"\n",
-        "Wasserstein softmax distance",wasoft_dist/num_batches,"\n",
-        "Energy distance",en_dist/num_batches,"\n",
-        "Energy softmax distance",ensoft_dist/num_batches,"\n",
-        "p == 1.5 CDF loss",p15_dist/num_batches,"\n",
-        "p == 1.5 CDF softmax loss",p15soft_dist/num_batches,"\n")
+        if print_stats:
+            print("Wasserstein Loss Results: \n",
+            "Wasserstein distance",wa_dist/num_batches,"\n",
+            "Wasserstein softmax distance",wasoft_dist/num_batches,"\n",
+            "Energy distance",en_dist/num_batches,"\n",
+            "Energy softmax distance",ensoft_dist/num_batches,"\n",
+            "p == 1.5 CDF loss",p15_dist/num_batches,"\n",
+            "p == 1.5 CDF softmax loss",p15soft_dist/num_batches,"\n")
 
         # Convert predictions to numpy arrays
         predicted_backlogs = np.concatenate(predicted_backlogs, axis=0)
@@ -347,7 +602,7 @@ class LatencyPredictor:
         return real_backlogs, real_drops, predicted_backlogs, predicted_drops
 
 
-    def prediction_plot(self, real_backlogs, real_drops, predicted_backlogs, predicted_drops, test_index=0):
+    def old_prediction_plot(self, real_backlogs, real_drops, predicted_backlogs, predicted_drops, test_index=0):
         """
         Given a bunch of predictions, visualize them.
 
@@ -399,7 +654,7 @@ class LatencyPredictor:
         # plt.title("Generated vs Predicted Backlog and Dropped Packets")
         plt.legend()
         plt.grid()
-        plt.savefig("RealvsPreBD_toobusy_new.pdf", format='pdf')
+        plt.savefig(f"{self.training_directory}/RealvsPreBD_toobusy_new.pdf", format='pdf')
         plt.show()
 
         # ============ Drop Position Match Accuracy ============ #

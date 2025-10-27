@@ -24,10 +24,8 @@ class LinkProperties:
     max_pkt_size: int
     min_queue_bytes: int
     max_queue_bytes:int
-
-    inter_pkt_time = 1.0  # Average time between packets (seconds per packet)
-
-    seq_length = 128  # Length of each sequence
+    #inter_pkt_time:float = 1.0  # Average time between packets (seconds per packet)
+    #seq_length:int = 128  # Length of each sequence
 
 @dataclass
 class TraceSample:
@@ -51,7 +49,7 @@ class TraceGenerator:
     num_training_samples, seq_length_training = 0, 0
     num_val_samples, seq_length_val = 0, 0
     num_test_samples, seq_length_test = 0, 0
-    trace_data = []
+    trace_data = {}
     dataX_tensor_v, dataY_tensor_v = None, None
     dataX_val_tensor_v, dataY_val_tensor_v = None, None
     dataX_test_tensor_v, dataY_test_tensor_v = None, None
@@ -125,7 +123,45 @@ class TraceGenerator:
                             dropped_sizes, dropped_indices)
 
 
-    def generate_trace_data_set(self, num_samples, seq_length):
+    def feature_vector_from_sample(self, trace_sample:TraceSample, input_str=None, output_str=None):
+        if not input_str:
+            input_str = self.input_str
+        if not output_str:
+            output_str = self.output_str
+
+        input_features = ()
+        for cc in self.input_str:
+            if cc == 't':
+                input_features += (trace_sample.inter_pkt_times_v,)
+            elif cc == 'b':
+                input_features += (trace_sample.inter_pkt_times_v * trace_sample.capacity_v,)
+            elif cc == 's':
+                input_features += (trace_sample.pkt_size_v,)
+            elif cc == 'c':
+                input_features += (trace_sample.capacity_v,)
+            elif cc == 'q':
+                input_features += (trace_sample.queue_bytes_v,)
+            elif cc == 'l':
+                print(f"WARNING: input feature: {cc} is not yet implemented")
+            else:
+                print(f"WARNING: input feature: {cc} is not recognized")
+
+        output_features = ()
+        for cc in self.output_str:
+            if cc == 'b':
+                output_features += (trace_sample.backlog_v,)
+            elif cc == 'l':
+                output_features += (trace_sample.latency_v,)
+            elif cc == 'd':
+                output_features += (trace_sample.dropped_status,)
+        return np.stack(input_features, axis=-1), np.stack(output_features, axis=-1)
+
+
+    def get_sample(self, test_index=0, data_set_name='test'):
+        return self.feature_vector_from_sample(self.trace_data[data_set_name][test_index])
+
+
+    def generate_trace_data_set(self, num_samples, seq_length, data_set_name='train'):
         """
         Possible input features:
         - t = inter-packet times
@@ -145,41 +181,15 @@ class TraceGenerator:
         """
         dataX= []  # Input sequences
         dataY = []  # Target output values
-        self.trace_data = []
+        if data_set_name not in self.trace_data:
+            self.trace_data[data_set_name] = []
 
         for _ in range(num_samples):
             trace_sample = self.generate_trace_sample(seq_length)
-            input_features = ()
-            for cc in self.input_str:
-                if cc == 't':
-                    input_features += (trace_sample.inter_pkt_times_v,)
-                elif cc == 'b':
-                    input_features += (trace_sample.inter_pkt_times_v * trace_sample.capacity_v,)
-                elif cc == 's':
-                    input_features += (trace_sample.pkt_size_v,)
-                elif cc == 'c':
-                    input_features += (trace_sample.capacity_v,)
-                elif cc == 'q':
-                    input_features += (trace_sample.queue_bytes_v,)
-                elif cc == 'l':
-                    print(f"WARNING: input feature: {cc} is not yet implemented")
-                else:
-                    print(f"WARNING: input feature: {cc} is not recognized")
-
-            output_features = ()
-            for cc in self.output_str:
-                if cc == 'b':
-                    output_features += (trace_sample.backlog_v,)
-                elif cc == 'l':
-                    output_features += (trace_sample.latency_v,)
-                elif cc == 'd':
-                    output_features += (trace_sample.dropped_status,)
-
-            #input_features_v = np.stack((trace_sample.inter_pkt_times_v * trace_sample.capacity_v, trace_sample.pkt_size_v, trace_sample.capacity_v, trace_sample.queue_bytes_v),axis=-1)
-            #output_features_v = np.stack((trace_sample.backlog_v, trace_sample.dropped_status), axis=-1)
-            dataX.append(np.stack(input_features, axis=-1))
-            dataY.append(np.stack(output_features, axis=-1))
-            self.trace_data.append(trace_sample)
+            input_features, output_features = self.feature_vector_from_sample(trace_sample)
+            dataX.append(input_features)
+            dataY.append(output_features)
+            self.trace_data[data_set_name].append(trace_sample)
 
         dataX_tensor_v = torch.tensor(np.array(dataX), dtype=torch.float32)
         dataY_tensor_v = torch.tensor(np.array(dataY), dtype=torch.float32)
@@ -190,28 +200,28 @@ class TraceGenerator:
     def create_loaders(self, num_training_samples, seq_length_training, num_val_samples, seq_length_val, num_test_samples, seq_length_test, batch_size=64):
         self.num_training_samples = num_training_samples
         self.seq_length_training = seq_length_training
-        dataX_tensor_v, dataY_tensor_v = self.generate_trace_data_set(num_training_samples, seq_length_training)
+        dataX_tensor_v, dataY_tensor_v = self.generate_trace_data_set(num_training_samples, seq_length_training, data_set_name='train')
         print(dataX_tensor_v.shape, dataY_tensor_v.shape)
 
         self.num_val_samples = num_val_samples  # Number of validation samples
         self.seq_length_val = seq_length_val  # Length of each sequence
-        dataX_val_tensor_v, dataY_val_tensor_v = self.generate_trace_data_set(num_val_samples, seq_length_val)
+        dataX_val_tensor_v, dataY_val_tensor_v = self.generate_trace_data_set(num_val_samples, seq_length_val, data_set_name='val')
         print(dataX_val_tensor_v.shape, dataY_val_tensor_v.shape)
 
         self.num_test_samples = num_test_samples
         self.seq_length_test = seq_length_test  # Length of each sequence
-        dataX_test_tensor_v, dataY_test_tensor_v = self.generate_trace_data_set(num_test_samples, seq_length_test)
+        dataX_test_tensor_v, dataY_test_tensor_v = self.generate_trace_data_set(num_test_samples, seq_length_test, data_set_name='test')
         # print("\nFirst 3 test samples:\n", dataX_test_tensor_v[:1])
         print(dataX_test_tensor_v.shape, dataY_test_tensor_v.shape)
 
         self.train_loader = data.DataLoader(data.TensorDataset(dataX_tensor_v, dataY_tensor_v), shuffle=True,
                                        batch_size=batch_size)
-        self.val_loader = data.DataLoader(data.TensorDataset(dataX_val_tensor_v, dataY_val_tensor_v), shuffle=True,
+        self.val_loader = data.DataLoader(data.TensorDataset(dataX_val_tensor_v, dataY_val_tensor_v), shuffle=False,
                                      batch_size=batch_size)
-        self.test_loader = data.DataLoader(TensorDataset(dataX_test_tensor_v, dataY_test_tensor_v), shuffle=True,
+        self.test_loader = data.DataLoader(TensorDataset(dataX_test_tensor_v, dataY_test_tensor_v), shuffle=False,
                                       batch_size=batch_size)
 
-    def plot_inputs(self, index=0):
+    def plot_inputs(self, index=0, data_set_name='train'):
         plt.rcParams.update({
             'font.size': 20,
             'font.weight': 'bold',
@@ -232,10 +242,10 @@ class TraceGenerator:
         })
 
         plt.figure(figsize=(12, 6))
-        arrival_times_v = self.trace_data[index].pkt_arrival_times_v
-        backlog_v = self.trace_data[index].backlog_v
-        pkt_size_v = self.trace_data[index].pkt_size_v
-        dropped_status = self.trace_data[index].dropped_status
+        arrival_times_v = self.trace_data[data_set_name][index].pkt_arrival_times_v
+        backlog_v = self.trace_data[data_set_name][index].backlog_v
+        pkt_size_v = self.trace_data[data_set_name][index].pkt_size_v
+        dropped_status = self.trace_data[data_set_name][index].dropped_status
         plt.plot(arrival_times_v, backlog_v, label="Generated Backlog", color='green', linewidth=2.5)
         plt.plot(arrival_times_v, pkt_size_v, label="Packet size", color='red', linestyle="dashed", linewidth=2)
         plt.scatter(arrival_times_v[dropped_status == 1], backlog_v[dropped_status == 1], color='blue', marker='x',
