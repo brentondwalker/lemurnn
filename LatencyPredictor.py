@@ -215,6 +215,7 @@ class LatencyPredictor:
                 optimizer.step()  # Update parameters
 
             num_train_samples = len(self.trace_generator.train_loader) * batch_size
+            train_loss /= num_train_samples
             train_backlog_loss /= num_train_samples
             train_dropped_loss /= num_train_samples
             train_droprate_loss /= num_train_samples
