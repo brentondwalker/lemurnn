@@ -396,7 +396,6 @@ class LatencyPredictor:
         :param test_index:
         :return:
         """
-        print(f"predict_sample() : print_stats={print_stats}")
 
         # first retrieve the data for this test_index
         input_features, output_features = self.trace_generator.get_sample(test_index=test_index, data_set_name=data_set_name)
@@ -466,8 +465,6 @@ class LatencyPredictor:
             'lines.linewidth': 2,
             'pdf.fonttype': 42  # embed TrueType fonts for LaTeX compatibility
         })
-        print(f"prediction_plot() : print_stats={print_stats}")
-        print(f"prediction_plot() : display_plot={display_plot}")
 
         true_backlog, true_drops, predicted_backlog, predicted_drops = self.predict_sample(test_index=test_index, data_set_name=data_set_name, print_stats=print_stats)
 
@@ -500,6 +497,8 @@ class LatencyPredictor:
             plt.savefig(f"{self.training_directory}/BD_plot_{data_set_name}_sample{test_index}{file_suffix}.png", format='png')
         if display_plot:
             plt.show()
+        # tell matplotlib we are done with the figure
+        plt.close()
 
         # ============ Drop Position Match Accuracy ============ #
         # Get sets of real and predicted dropped positions
