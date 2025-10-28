@@ -17,6 +17,8 @@ def main():
     parser.add_argument('--kilo_val_samples', type=int, default=1)
     parser.add_argument('--kilo_test_samples', type=int, default=1)
     parser.add_argument('--seq_len', type=int, default=128)
+    parser.add_argument('--data_seed', type=int, default=None)
+    parser.add_argument('--torch_seed', type=int, default=None)
     parser.add_argument("-r", '--learning_rate', type=float, default=0.001)
     parser.add_argument("-a", '--compute_ads_loss', action='store_true')
 
@@ -32,6 +34,8 @@ def main():
     kilo_test_samples = args.kilo_test_samples
     seq_len = args.seq_len
     learning_rate = args.learning_rate
+    data_seed = args.data_seed
+    torch_seed = args.torch_seed
     if compute_ads_loss:
         ads_loss_interval = 100
 
@@ -48,9 +52,10 @@ def main():
 
     trace_generator.create_loaders(1024*kilo_training_samples, seq_len,
                                    1024*kilo_val_samples, seq_len,
-                                   1024*kilo_test_samples, seq_len*2)
+                                   1024*kilo_test_samples, seq_len*2,
+                                   seed=data_seed)
 
-    latency_predictor = LatencyPredictor(hidden_size=hidden_size, num_layers=num_layers, trace_generator=trace_generator)
+    latency_predictor = LatencyPredictor(hidden_size=hidden_size, num_layers=num_layers, trace_generator=trace_generator, seed=torch_seed)
 
     latency_predictor.train(learning_rate=learning_rate, n_epochs=num_epochs, ads_loss_interval=ads_loss_interval)
 

@@ -6,7 +6,6 @@ import json
 
 import numpy as np
 import matplotlib.pyplot as plt
-import random
 from dataclasses import dataclass
 from typing import List
 import torch
@@ -41,9 +40,9 @@ class TraceSample:
     dropped_sizes:List[int]
     dropped_indices:List[int]
 
-
 class TraceGenerator:
-    seed = 0
+    seed = None
+    test_seed = None
     input_str = ''
     output_str = ''
     link_properties: LinkProperties = None
@@ -58,21 +57,10 @@ class TraceGenerator:
     val_loader:data.DataLoader = None
     test_loader:data.DataLoader = None
 
-    def __init__(self, link_properties:LinkProperties, input_str='bscq', output_str='bd', seed=10):
+    def __init__(self, link_properties:LinkProperties, input_str='bscq', output_str='bd'):
         self.link_properties = link_properties
-        self.seed = seed
         self.input_str = input_str
         self.output_str = output_str
-        num_seed = seed
-        torch.manual_seed(num_seed)
-        random.seed(num_seed)
-        np.random.seed(num_seed)
-
-    def reseed(self, seed):
-        self.seed = seed
-        torch.manual_seed(seed)
-        random.seed(seed)
-        np.random.seed(seed)
 
     def save_dataset_properties(self, filename):
         dataset_properties = {
@@ -85,7 +73,8 @@ class TraceGenerator:
             'input_str': self.input_str,
             'output_str': self.output_str,
             'input_size': self.input_size(),
-            'output_size': self.output_size()
+            'output_size': self.output_size(),
+            'seed': self.seed
         }
         with open(filename, "w") as dataset_properties_file:
                 dataset_properties_file.write(json.dumps(dataset_properties))
@@ -215,7 +204,19 @@ class TraceGenerator:
         return dataX_tensor_v, dataY_tensor_v
 
 
-    def create_loaders(self, num_training_samples, seq_length_training, num_val_samples, seq_length_val, num_test_samples, seq_length_test, batch_size=64):
+    def create_loaders(self, num_training_samples, seq_length_training, num_val_samples, seq_length_val, num_test_samples, seq_length_test, batch_size=64, seed=None):
+        self.seed = seed
+        rng_backup = np.random.get_state()
+        if self.seed:
+            np.random.seed(self.seed)
+
+        # Generate test data first, so it will always be the same, even
+        # if we change the size of training or val sets.
+        self.num_test_samples = num_test_samples
+        self.seq_length_test = seq_length_test  # Length of each sequence
+        dataX_test_tensor_v, dataY_test_tensor_v = self.generate_trace_data_set(num_test_samples, seq_length_test, data_set_name='test')
+        print(dataX_test_tensor_v.shape, dataY_test_tensor_v.shape)
+
         self.num_training_samples = num_training_samples
         self.seq_length_training = seq_length_training
         dataX_tensor_v, dataY_tensor_v = self.generate_trace_data_set(num_training_samples, seq_length_training, data_set_name='train')
@@ -226,11 +227,8 @@ class TraceGenerator:
         dataX_val_tensor_v, dataY_val_tensor_v = self.generate_trace_data_set(num_val_samples, seq_length_val, data_set_name='val')
         print(dataX_val_tensor_v.shape, dataY_val_tensor_v.shape)
 
-        self.num_test_samples = num_test_samples
-        self.seq_length_test = seq_length_test  # Length of each sequence
-        dataX_test_tensor_v, dataY_test_tensor_v = self.generate_trace_data_set(num_test_samples, seq_length_test, data_set_name='test')
-        # print("\nFirst 3 test samples:\n", dataX_test_tensor_v[:1])
-        print(dataX_test_tensor_v.shape, dataY_test_tensor_v.shape)
+        if self.seed:
+            np.random.set_state(rng_backup)
 
         self.train_loader = data.DataLoader(data.TensorDataset(dataX_tensor_v, dataY_tensor_v), shuffle=True,
                                        batch_size=batch_size)

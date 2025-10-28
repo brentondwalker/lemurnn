@@ -77,19 +77,23 @@ class LatencyPredictor:
     training_history:List[TrainingRecord] = []
     data_directory = None
     training_directory = None
+    seed = None
 
-    def __init__(self, hidden_size, num_layers, trace_generator:TraceGenerator, device=None):
+    def __init__(self, hidden_size, num_layers, trace_generator:TraceGenerator, device=None, seed=None):
         if device:
             self.device = device
         else:
             self.device = self.get_device()
+        self.seed = seed
+        if self.seed:
+            torch.manual_seed(self.seed)
         self.epoch = -1
         self.hidden_size = hidden_size
         self.num_layers = num_layers
         self.trace_generator = trace_generator
         self.input_size = trace_generator.input_size()
         self.output_size = trace_generator.output_size()
-        self.model = NonManualRNN(input_size=self.input_size, hidden_size=self.hidden_size).to(self.device)
+        self.model = NonManualRNN(input_size=self.input_size, hidden_size=self.hidden_size, num_layers=self.num_layers).to(self.device)
         self.best_model = deepcopy(self.model.state_dict())
         self.best_model_epoch = -1
 
@@ -107,7 +111,8 @@ class LatencyPredictor:
                             'output_size': self.output_size,
                             'hidden_size': self.hidden_size,
                             'num_layers': self.num_layers,
-                            'learning_rate': self.learning_rate}
+                            'learning_rate': self.learning_rate,
+                            'seed': self.seed}
         with open(model_properties_filename, "w") as model_properties_file:
             model_properties_file.write(json.dumps(model_properties))
             model_properties_file.write("\n")
@@ -179,7 +184,7 @@ class LatencyPredictor:
         optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
         criterion_backlog = nn.L1Loss()
         criterion_dropped = nn.CrossEntropyLoss()
-        testmodel = NonManualRNN(input_size=self.input_size, hidden_size=self.hidden_size).to(self.device)
+        testmodel = NonManualRNN(input_size=self.input_size, hidden_size=self.hidden_size, num_layers=self.num_layers).to(self.device)
         ads_loss = {0: 0, 1: 0, 2: 0, 4: 0, 8: 0, 16: 0}
         ads_new_model = False
 
@@ -191,7 +196,7 @@ class LatencyPredictor:
             for X_batch, y_batch in self.trace_generator.train_loader:
                 #print(X_batch.shape, y_batch.shape)
                 batch_size, seq_length, _ = X_batch.size()
-                hidden = torch.zeros(1, batch_size, self.hidden_size).to(self.device)  # Move hidden to same device
+                hidden = torch.zeros(self.num_layers, batch_size, self.hidden_size).to(self.device)  # Move hidden to same device
 
                 X_batch, y_batch = X_batch.to(self.device), y_batch.to(self.device)
                 backlog_pred, dropped_pred, hidden = self.model(X_batch, hidden.to(self.device))  # Forward pass
@@ -234,7 +239,7 @@ class LatencyPredictor:
             with torch.no_grad():
                 for X_val, y_val in self.trace_generator.val_loader:
                     batch_size_val, _, _ = X_val.size()
-                    hidden = torch.zeros(1, batch_size_val, self.hidden_size).to(self.device)
+                    hidden = torch.zeros(self.num_layers, batch_size_val, self.hidden_size).to(self.device)
 
                     X_val, y_val = X_val.to(self.device), y_val.to(self.device)
                     backlog_target_val = y_val[:, :, 0].unsqueeze(-1)
@@ -289,7 +294,7 @@ class LatencyPredictor:
             with torch.no_grad():
                 for X_test, y_test in self.trace_generator.test_loader:
                     batch_size_test, _, _ = X_test.size()
-                    hidden = torch.zeros(1, batch_size_test, self.hidden_size).to(self.device)
+                    hidden = torch.zeros(self.num_layers, batch_size_test, self.hidden_size).to(self.device)
 
                     X_test, y_test = X_test.to(self.device), y_test.to(self.device)
                     backlog_target_test = y_test[:, :, 0].unsqueeze(-1)
@@ -407,7 +412,7 @@ class LatencyPredictor:
         dataY = torch.tensor(output_features, dtype=torch.float32).unsqueeze(dim=0)
 
         # allocate a model to use for eval
-        eval_model = NonManualRNN(input_size=self.input_size, hidden_size=self.hidden_size)  #.to(self.device)
+        eval_model = NonManualRNN(input_size=self.input_size, hidden_size=self.hidden_size, num_layers=self.num_layers)  #.to(self.device)
         if model_dict:
             eval_model.load_state_dict(model_dict)
         else:
@@ -417,7 +422,7 @@ class LatencyPredictor:
         wa_dist, wasoft_dist, en_dist, ensoft_dist, p15_dist, p15soft_dist = 0,0,0,0,0,0
 
         with torch.no_grad():
-            hidden = torch.zeros(1, dataX.size(0), self.hidden_size)  #.to(self.device)
+            hidden = torch.zeros(self.num_layers, dataX.size(0), self.hidden_size)  #.to(self.device)
             backlog_pred, dropped_pred, _ = eval_model(dataX, hidden)
             dropped_pred_binary = torch.argmax(dropped_pred, dim=2)
             dropped_pred_softbinary = torch.softmax(dropped_pred, dim=2)
@@ -551,7 +556,7 @@ class LatencyPredictor:
         :param model_dict:
         :return:
         """
-        eval_model = NonManualRNN(input_size=self.input_size, hidden_size=self.hidden_size).to(self.device)
+        eval_model = NonManualRNN(input_size=self.input_size, hidden_size=self.hidden_size, num_layers=self.num_layers).to(self.device)
 
         if model_dict:
             eval_model.load_state_dict(model_dict)
@@ -570,7 +575,7 @@ class LatencyPredictor:
         with torch.no_grad():
             for X_test, y_test in loader:
                 X_test, y_test = X_test.to(self.device), y_test.to(self.device)
-                hidden = torch.zeros(1, X_test.size(0), self.hidden_size).to(self.device)
+                hidden = torch.zeros(self.num_layers, X_test.size(0), self.hidden_size).to(self.device)
                 backlog_pred_test, dropped_pred_test, _ = eval_model(X_test, hidden)
                 dropped_pred_test_binary = torch.argmax(dropped_pred_test, dim=2)
                 dropped_pred_test_softbinary = torch.softmax(dropped_pred_test, dim=2)
