@@ -43,6 +43,7 @@ class NonManualRNN(nn.Module):
 @dataclass
 class TrainingRecord:
     epoch:int
+    learning_rate:float
     best_model:str
     train_loss:float
     val_loss:float
@@ -97,25 +98,25 @@ class LatencyPredictor:
         self.set_data_directory(os.getcwd())
         self.set_training_directory(create=True)
         self.save_link_properties()
-        self.save_dataset_properties()
+        self.trace_generator.save_dataset_properties(f"{self.training_directory}/dataset-properties.json")
 
-    def save_dataset_properties(self):
-        dataset_properties_filename = f"{self.training_directory}/dataset-properties.json"
-        with open(dataset_properties_filename, "w") as dataset_properties_file:
-                dataset_properties_file.write(f"{self.trace_generator.num_training_samples}\n")
-                dataset_properties_file.write(f"{self.trace_generator.seq_length_training}\n")
-                dataset_properties_file.write(f"{self.trace_generator.num_val_samples}\n")
-                dataset_properties_file.write(f"{self.trace_generator.seq_length_val}\n")
-                dataset_properties_file.write(f"{self.trace_generator.num_test_samples}\n")
-                dataset_properties_file.write(f"{self.trace_generator.seq_length_test}\n")
 
+    def save_model_properties(self):
+        model_properties_filename = f"{self.training_directory}/model-properties.json"
+        model_properties = {'input_size': self.input_size,
+                            'output_size': self.output_size,
+                            'hidden_size': self.hidden_size,
+                            'num_layers': self.num_layers,
+                            'learning_rate': self.learning_rate}
+        with open(model_properties_filename, "w") as model_properties_file:
+            model_properties_file.write(json.dumps(model_properties))
+            model_properties_file.write("\n")
 
     def save_link_properties(self):
         link_properties_filename = f"{self.training_directory}/link-properties.json"
         with open(link_properties_filename, "w") as link_properties_file:
                 link_properties_file.write(json.dumps(dataclasses.asdict(self.trace_generator.link_properties)))
                 link_properties_file.write("\n")
-                link_properties_file
 
     def set_data_directory(self, path):
         if os.path.isdir(path):
@@ -147,11 +148,9 @@ class LatencyPredictor:
             print("Using CPU.")
         return device
 
-
     def weight_string(self, weight_dict):
         weights = [entry for arr in weight_dict.items() for entry in arr[1].cpu().ravel().numpy().tolist()]
         return "\t".join([str(ww) for ww in weights])
-
 
     def save_model_state(self, epoch, model, optimizer):
         """
@@ -172,10 +171,12 @@ class LatencyPredictor:
 
     def train(self, learning_rate=0.001, n_epochs=1, loss_file=None, compute_ads_loss=False):
         self.set_training_directory(create=True)
+        self.learning_rate = learning_rate
+        self.save_model_properties()
         training_log_filename = f"{self.training_directory}/training_log.dat"
         training_history_filename = f"{self.training_directory}/training_history.json"
 
-        optimizer = optim.Adam(self.model.parameters(), lr=learning_rate)
+        optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
         criterion_backlog = nn.L1Loss()
         criterion_dropped = nn.CrossEntropyLoss()
         testmodel = NonManualRNN(input_size=self.input_size, hidden_size=self.hidden_size).to(self.device)
@@ -333,7 +334,7 @@ class LatencyPredictor:
             t_droprate_loss /= num_test_samples
             test_loss = t_backlog_loss + t_dropped_loss + t_droprate_loss + t_dropped_wa_loss
             if new_best_model:
-                self.prediction_plot(test_index=0, data_set_name='test', display_plot=False, save_plot=True, print_stats=False, file_suffix=f"_epoch{self.epoch}")
+                self.prediction_plot(test_index=0, data_set_name='test', display_plot=False, save_png=True, print_stats=False, file_suffix=f"_epoch{self.epoch}")
             if new_best_model and compute_ads_loss:
                 ads_loss[0] /= num_test_samples
                 radius = 1
@@ -359,7 +360,7 @@ class LatencyPredictor:
                 loss_file.write(
                     f"{self.epoch}\t{train_loss:.4f}\t{val_loss:.4f}\t{test_loss:.4f}\t{self.best_loss:.4f}\t{t_backlog_loss:.4f}\t{t_backlog_loss_n:.4f}\t{t_dropped_loss:.4f}\t{t_dropped_wa_loss:.4f}\t{t_dropped_en_loss:.4f}\t{t_dropped_p15_loss:.4f}\t{t_droprate_loss:.4f}\t{ads_str}\t{self.best_model_epoch}\n")
 
-            self.training_history.append(TrainingRecord(self.epoch, self.best_model_file,
+            self.training_history.append(TrainingRecord(self.epoch, self.learning_rate, self.best_model_file,
                 train_loss, val_loss, test_loss,
                 train_loss_details, val_loss_details, test_loss_details))
             with open(training_history_filename, "a", buffering=1) as history_file:
@@ -439,7 +440,7 @@ class LatencyPredictor:
         return dataY[:, :, 0].squeeze().numpy(), dataY[:,:,1].squeeze().numpy(), backlog_pred.squeeze().numpy(), dropped_pred_binary.squeeze().numpy()
 
 
-    def prediction_plot(self, test_index=0, data_set_name='test', display_plot=True, save_plot=True, print_stats=True, file_suffix=""):
+    def prediction_plot(self, test_index=0, data_set_name='test', display_plot=True, save_png=True, save_pdf=False, print_stats=True, file_suffix=""):
         """
         Given a bunch of predictions, visualize them.
 
@@ -493,8 +494,9 @@ class LatencyPredictor:
         # plt.title("Generated vs Predicted Backlog and Dropped Packets")
         plt.legend()
         plt.grid()
-        if save_plot:
+        if save_pdf:
             plt.savefig(f"{self.training_directory}/BD_plot_{data_set_name}_sample{test_index}{file_suffix}.pdf", format='pdf')
+        if save_png:
             plt.savefig(f"{self.training_directory}/BD_plot_{data_set_name}_sample{test_index}{file_suffix}.png", format='png')
         if display_plot:
             plt.show()
