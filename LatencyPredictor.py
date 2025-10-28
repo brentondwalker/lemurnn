@@ -169,7 +169,7 @@ class LatencyPredictor:
         torch.save(state, filepath)
 
 
-    def train(self, learning_rate=0.001, n_epochs=1, loss_file=None, compute_ads_loss=False):
+    def train(self, learning_rate=0.001, n_epochs=1, loss_file=None, ads_loss_interval=0):
         self.set_training_directory(create=True)
         self.learning_rate = learning_rate
         self.save_model_properties()
@@ -181,6 +181,7 @@ class LatencyPredictor:
         criterion_dropped = nn.CrossEntropyLoss()
         testmodel = NonManualRNN(input_size=self.input_size, hidden_size=self.hidden_size).to(self.device)
         ads_loss = {0: 0, 1: 0, 2: 0, 4: 0, 8: 0, 16: 0}
+        ads_new_model = False
 
         for epoch_i in range(n_epochs):
             self.epoch += 1
@@ -269,6 +270,7 @@ class LatencyPredictor:
                 self.best_model_epoch = self.epoch
                 self.save_model_state(self.epoch, self.model, optimizer)
                 new_best_model = True
+                ads_new_model = True
 
             val_loss_details = {'backlog_loss': v_backlog_loss,
                                   'dropped_loss': v_dropped_loss,
@@ -279,7 +281,7 @@ class LatencyPredictor:
             test_loss, t_backlog_loss, t_backlog_loss_n, t_dropped_loss = 0, 0, 0, 0
             t_dropped_wa_loss, t_dropped_en_loss, t_dropped_p15_loss = 0, 0, 0
             t_droprate_loss = 0.0
-            if new_best_model:
+            if ads_loss_interval > 0 and ads_new_model and (self.epoch % ads_loss_interval) == 0:
                 ads_loss = {0: 0, 1: 0, 2: 0, 4: 0, 8: 0, 16: 0}
             testmodel.load_state_dict(self.best_model)  # Load the current best model
             testmodel.eval()  # Ensure evaluation mode
@@ -313,7 +315,7 @@ class LatencyPredictor:
                     t_droprate_loss += torch.sum(torch.abs(
                         torch.sum(y_test[:, :, 1], dim=1) - torch.sum(dropped_pred_test_binary, dim=1))).item()
                     #print(dropped_pred_test_binary.shape, y_test[0, :, 1].shape)
-                    if new_best_model and compute_ads_loss:
+                    if ads_loss_interval > 0 and ads_new_model and (self.epoch % ads_loss_interval) == 0:
                         # Be frugal with this, because I have not parallelized it.
                         # It is super slow.
                         for i in range(batch_size_test):
@@ -335,7 +337,7 @@ class LatencyPredictor:
             test_loss = t_backlog_loss + t_dropped_loss + t_droprate_loss + t_dropped_wa_loss
             if new_best_model:
                 self.prediction_plot(test_index=0, data_set_name='test', display_plot=False, save_png=True, print_stats=False, file_suffix=f"_epoch{self.epoch}")
-            if new_best_model and compute_ads_loss:
+            if ads_loss_interval > 0 and ads_new_model and (self.epoch % ads_loss_interval) == 0:
                 ads_loss[0] /= num_test_samples
                 radius = 1
                 for p in range(5):

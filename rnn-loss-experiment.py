@@ -17,7 +17,7 @@ def main():
     parser.add_argument('--kilo_val_samples', type=int, default=1)
     parser.add_argument('--kilo_test_samples', type=int, default=1)
     parser.add_argument('--seq_len', type=int, default=128)
-    parser.add_argument("-r", '--learning_rate', type=int, default=0.001)
+    parser.add_argument("-r", '--learning_rate', type=float, default=0.001)
     parser.add_argument("-a", '--compute_ads_loss', action='store_true')
 
     args = parser.parse_args()
@@ -26,11 +26,14 @@ def main():
     hidden_size = args.hidden_size
     num_epochs = args.num_epochs
     compute_ads_loss = args.compute_ads_loss
+    ads_loss_interval = 0
     kilo_training_samples = args.kilo_training_samples
     kilo_val_samples = args.kilo_val_samples
     kilo_test_samples = args.kilo_test_samples
     seq_len = args.seq_len
     learning_rate = args.learning_rate
+    if compute_ads_loss:
+        ads_loss_interval = 100
 
     link_properties = LinkProperties(min_arrival_rate=0.2,
                         max_arrival_rate=1,
@@ -49,7 +52,7 @@ def main():
 
     latency_predictor = LatencyPredictor(hidden_size=hidden_size, num_layers=num_layers, trace_generator=trace_generator)
 
-    latency_predictor.train(learning_rate=learning_rate, n_epochs=num_epochs, compute_ads_loss=compute_ads_loss)
+    latency_predictor.train(learning_rate=learning_rate, n_epochs=num_epochs, ads_loss_interval=ads_loss_interval)
 
 
 
