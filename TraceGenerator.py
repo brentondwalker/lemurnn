@@ -64,6 +64,7 @@ class TraceGenerator:
 
     def save_dataset_properties(self, filename):
         dataset_properties = {
+            'name': str(self.__class__),
             'num_training_samples': self.num_training_samples,
             'num_val_samples': self.num_val_samples,
             'num_test_samples': self.num_test_samples,

@@ -21,6 +21,7 @@ def main():
     parser.add_argument('--torch_seed', type=int, default=None)
     parser.add_argument("-r", '--learning_rate', type=float, default=0.001)
     parser.add_argument("-a", '--compute_ads_loss', action='store_true')
+    parser.add_argument('--codel', action='store_true')
 
     args = parser.parse_args()
 
@@ -36,6 +37,7 @@ def main():
     learning_rate = args.learning_rate
     data_seed = args.data_seed
     torch_seed = args.torch_seed
+    codel = args.codel
     if compute_ads_loss:
         ads_loss_interval = 100
 
@@ -48,7 +50,11 @@ def main():
                         min_queue_bytes=2500,
                         max_queue_bytes=10000)
 
-    trace_generator = TraceGenerator(link_properties)
+    trace_generator = None
+    if codel:
+        trace_generator = TraceGeneratorCodel(link_properties, base_interval=10, codel_threshold=5)
+    else:
+        trace_generator = TraceGenerator(link_properties)
 
     trace_generator.create_loaders(1024*kilo_training_samples, seq_len,
                                    1024*kilo_val_samples, seq_len,
