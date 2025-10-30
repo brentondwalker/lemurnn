@@ -113,9 +113,15 @@ class LatencyPredictor:
                             'num_layers': self.num_layers,
                             'learning_rate': self.learning_rate,
                             'seed': self.seed}
+        # add any attributes that are specific to subclasses
+        model_properties = dict(list(model_properties.items()) + list(self.get_extra_model_properties().items()))
         with open(model_properties_filename, "w") as model_properties_file:
             model_properties_file.write(json.dumps(model_properties))
             model_properties_file.write("\n")
+
+    def get_extra_model_properties(self):
+        extra_model_properties = {}
+        return extra_model_properties
 
     def save_link_properties(self):
         link_properties_filename = f"{self.training_directory}/link-properties.json"
@@ -308,7 +314,6 @@ class LatencyPredictor:
                     dropped_loss_test = criterion_dropped(dropped_pred_test.view(-1, 2), dropped_target_test.view(-1))
                     dropped_pred_test_binary = torch.argmax(dropped_pred_test, dim=2)
 
-                    test_loss += (backlog_loss_test + dropped_loss_test).item()
                     t_backlog_loss += backlog_loss_test.item()
                     t_backlog_loss_n += backlog_loss_test_n.item()
                     t_dropped_loss += dropped_loss_test.item()

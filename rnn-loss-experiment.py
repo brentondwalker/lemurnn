@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
 import argparse
+
+from LatencyPredictorEnergy import LatencyPredictorEnergy
 from TraceGenerator import *
 from LatencyPredictor import *
 from TraceGeneratorCodel import TraceGeneratorCodel
@@ -22,6 +24,7 @@ def main():
     parser.add_argument("-r", '--learning_rate', type=float, default=0.001)
     parser.add_argument("-a", '--compute_ads_loss', action='store_true')
     parser.add_argument('--codel', action='store_true')
+    parser.add_argument('--energy', action='store_true')
 
     args = parser.parse_args()
 
@@ -38,6 +41,7 @@ def main():
     data_seed = args.data_seed
     torch_seed = args.torch_seed
     codel = args.codel
+    energy = args.energy
     if compute_ads_loss:
         ads_loss_interval = 100
 
@@ -61,7 +65,10 @@ def main():
                                    1024*kilo_test_samples, seq_len*2,
                                    seed=data_seed)
 
-    latency_predictor = LatencyPredictor(hidden_size=hidden_size, num_layers=num_layers, trace_generator=trace_generator, seed=torch_seed)
+    if (energy):
+        latency_predictor = LatencyPredictorEnergy(hidden_size=hidden_size, num_layers=num_layers, trace_generator=trace_generator, seed=torch_seed)
+    else:
+        latency_predictor = LatencyPredictor(hidden_size=hidden_size, num_layers=num_layers, trace_generator=trace_generator, seed=torch_seed)
 
     latency_predictor.train(learning_rate=learning_rate, n_epochs=num_epochs, ads_loss_interval=ads_loss_interval)
 
