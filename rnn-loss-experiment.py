@@ -3,7 +3,7 @@
 import argparse
 from TraceGenerator import *
 from LatencyPredictor import *
-
+from TraceGeneratorCodel import TraceGeneratorCodel
 
 
 def main():

@@ -26,28 +26,18 @@ class TraceGeneratorCodel(TraceGenerator):
         super().__init__(link_properties, input_str, output_str)
         self.base_interval = base_interval
         self.codel_threshold = codel_threshold
+        self.data_type = 'codel'
 
 
-    def save_dataset_properties(self, filename):
-        dataset_properties = {
-            'name': str(self.__class__),
-            'num_training_samples': self.num_training_samples,
-            'num_val_samples': self.num_val_samples,
-            'num_test_samples': self.num_test_samples,
-            'seq_length_training': self.seq_length_training,
-            'seq_length_val': self.seq_length_val,
-            'seq_length_test': self.seq_length_test,
-            'input_str': self.input_str,
-            'output_str': self.output_str,
-            'input_size': self.input_size(),
-            'output_size': self.output_size(),
-            'seed': self.seed,
+    def get_extra_dataset_properties(self):
+        """
+        This will be called by save_dataset_properties() in the superclass.
+        """
+        extra_dataset_properties = {
             'base_interval': self.base_interval,
             'codel_threshold': self.codel_threshold
         }
-        with open(filename, "w") as dataset_properties_file:
-                dataset_properties_file.write(json.dumps(dataset_properties))
-                dataset_properties_file.write("\n")
+        return extra_dataset_properties
 
     def generate_trace_sample(self, seq_length:int):
         base_interval = 10

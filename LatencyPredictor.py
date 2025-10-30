@@ -136,7 +136,7 @@ class LatencyPredictor:
             else:
                 print(f"ERROR: training directory does not exist: {path}")
         elif not self.training_directory:
-                self.training_directory = f"{self.data_directory}/model-training/model-{self.model_type}-layers{self.num_layers}_hidden{self.hidden_size}-{int(time.time())}"
+                self.training_directory = f"{self.data_directory}/model-training/model-{self.model_type}-{self.trace_generator.data_type}-layers{self.num_layers}_hidden{self.hidden_size}-{int(time.time())}"
         if create:
             if os.path.isdir(self.training_directory):
                 print(f"WARNING: training dir already exists: {self.training_directory}")

@@ -43,6 +43,7 @@ class TraceSample:
 class TraceGenerator:
     seed = None
     test_seed = None
+    data_type = 'bytequeue'
     input_str = ''
     output_str = ''
     link_properties: LinkProperties = None
@@ -61,10 +62,12 @@ class TraceGenerator:
         self.link_properties = link_properties
         self.input_str = input_str
         self.output_str = output_str
+        self.data_type = 'bytequeue'
 
     def save_dataset_properties(self, filename):
         dataset_properties = {
             'name': str(self.__class__),
+            'data_type': self.data_type,
             'num_training_samples': self.num_training_samples,
             'num_val_samples': self.num_val_samples,
             'num_test_samples': self.num_test_samples,
@@ -75,11 +78,17 @@ class TraceGenerator:
             'output_str': self.output_str,
             'input_size': self.input_size(),
             'output_size': self.output_size(),
-            'seed': self.seed
+            'seed': self.seed,
         }
+        # add any attributes that are specific to subclasses
+        dataset_properties = dict(list(dataset_properties.items()) + list(self.get_extra_dataset_properties().items()))
         with open(filename, "w") as dataset_properties_file:
                 dataset_properties_file.write(json.dumps(dataset_properties))
                 dataset_properties_file.write("\n")
+
+    def get_extra_dataset_properties(self):
+        extra_dataset_properties = {}
+        return extra_dataset_properties
 
     def input_size(self):
         return len(self.input_str)
