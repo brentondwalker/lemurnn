@@ -31,14 +31,14 @@ class LatencyPredictorEnergy(LatencyPredictor):
     model_type = 'rnnenergy'
     energy_distance_scale = 10
 
-    def __init__(self, hidden_size, num_layers, trace_generator: TraceGenerator, device=None, seed=None):
+    def __init__(self, hidden_size, num_layers, trace_generator: TraceGenerator, device=None, seed=None, loadpath=None):
         """
         Because the superclass init() already creates the training directory and saves the model properties,
         we would have to set any variables we want before calling the super().init().
         Which seems like bad practice.
         So model_type and energy_distance_scale are hard coded in the class, which may be even worse.
         """
-        super().__init__(hidden_size, num_layers, trace_generator, device, seed)
+        super().__init__(hidden_size, num_layers, trace_generator, device=device, seed=seed, loadpath=loadpath)
 
 
     def get_extra_model_properties(self):

@@ -585,6 +585,9 @@ class LatencyPredictor:
             total = len(real_indices)
             accuracy = correct / total * 100 if total > 0 else 0.0
 
+            pred_indices = [xx.item() for xx in pred_indices]
+            real_indices = [xx.item() for xx in real_indices]
+            matched = [xx.item() for xx in matched]
             print(f"Drop position match accuracy (example {test_index}): {accuracy:.2f}% ({correct}/{total})")
             print("Ground truth dropped positions:", sorted(real_indices))
             print("Predicted dropped positions:", sorted(pred_indices))
@@ -597,8 +600,8 @@ class LatencyPredictor:
             print(f"adropsim(8) = {self.adropsim(pred_dropped_status, real_dropped_status, 8)}")
             print(f"adropsim(16) = {self.adropsim(pred_dropped_status, real_dropped_status, 16)}")
 
-            tensor_w1 = Variable(torch.from_numpy(real_dropped_status.astype(dtype=np.float64)))
-            tensor_w2 = Variable(torch.from_numpy(pred_dropped_status.astype(dtype=np.float64)))
+            tensor_w1 = torch.from_numpy(real_dropped_status.astype(dtype=np.float64))
+            tensor_w2 = torch.from_numpy(pred_dropped_status.astype(dtype=np.float64))
             print("\n\nWasserstein Results:")
             print("Wasserstein loss", stats_loss.torch_wasserstein_loss(tensor_w1, tensor_w2).data,
                   stats_loss.torch_wasserstein_loss(tensor_w1, tensor_w2).requires_grad)
