@@ -1,5 +1,6 @@
 import dataclasses
 import json
+import re
 import time
 from collections import OrderedDict
 from copy import deepcopy
@@ -79,7 +80,16 @@ class LatencyPredictor:
     training_directory = None
     seed = None
 
-    def __init__(self, hidden_size, num_layers, trace_generator:TraceGenerator, device=None, seed=None):
+    def __init__(self, hidden_size, num_layers, trace_generator:TraceGenerator, device=None, seed=None, loadpath=None):
+        """
+        XXX in the case of loadpath, we should load all the model info from the
+        :param hidden_size:
+        :param num_layers:
+        :param trace_generator:
+        :param device:
+        :param seed:
+        :param loadpath:
+        """
         if device:
             self.device = device
         else:
@@ -93,7 +103,10 @@ class LatencyPredictor:
         self.trace_generator = trace_generator
         self.input_size = trace_generator.input_size()
         self.output_size = trace_generator.output_size()
-        self.model = NonManualRNN(input_size=self.input_size, hidden_size=self.hidden_size, num_layers=self.num_layers).to(self.device)
+        if loadpath:
+            self.load_model_state(loadpath)
+        else:
+            self.model = NonManualRNN(input_size=self.input_size, hidden_size=self.hidden_size, num_layers=self.num_layers).to(self.device)
         self.best_model = deepcopy(self.model.state_dict())
         self.best_model_epoch = -1
 
@@ -122,6 +135,20 @@ class LatencyPredictor:
     def get_extra_model_properties(self):
         extra_model_properties = {}
         return extra_model_properties
+
+    def load_model_properties(self, loadpath):
+        with open(f"{loadpath}/model-properties.json") as f:
+            model_properties = json.load(f)
+            self.input_size = model_properties['input_size']
+            self.output_size = model_properties['output_size']
+            self.hidden_size = model_properties['hidden_size']
+            self.num_layers = model_properties['num_layers']
+            self.learning_rate = model_properties['learning_rate']
+            self.seed = model_properties['seed']
+            self.load_extra_model_properties(model_properties)
+
+    def load_extra_model_properties(self, model_properties):
+        return
 
     def save_link_properties(self):
         link_properties_filename = f"{self.training_directory}/link-properties.json"
@@ -179,6 +206,37 @@ class LatencyPredictor:
         filepath = f"{self.training_directory}/modelstate-{epoch}.json"
         torch.save(state, filepath)
 
+    def load_model_state(self, directory, epoch=-1):
+        """
+        Loads the specified model and optimizer state, and sets the class epoch.
+        If you pass in epoch=-1, it will load the most recent model.
+        kind-of inconsistent here.  The save function takes arguments, but the load
+        function loads the values directly to the class and returns nothing.
+        :param directory:
+        :param epoch:
+        :return:
+        """
+        if epoch < 0:
+            pattern = re.compile(r'^modelstate-(\d+).json$')
+            numbers = []
+            try:
+                for filename in os.listdir(directory):
+                    match = pattern.match(filename)
+                    if match:
+                        numbers.append(int(match.group(1)))
+            except FileNotFoundError:
+                raise ValueError(f"Directory not found: {directory}")
+            epoch = max(numbers)
+
+        state_file_name = f"{directory}/modelstate-{epoch}.json"
+        print(f"Loading state: {state_file_name}")
+        state = torch.load(state_file_name, map_location=self.device)
+        self.model = NonManualRNN(input_size=self.input_size, hidden_size=self.hidden_size, num_layers=self.num_layers).to(self.device)
+        self.model.load_state_dict(state['state_dict'])
+        self.optimizer = optim.Adam(self.model.parameters())
+        self.optimizer.load_state_dict(state['optimizer'])
+        self.epoch = epoch
+
 
     def train(self, learning_rate=0.001, n_epochs=1, loss_file=None, ads_loss_interval=0):
         self.set_training_directory(create=True)
@@ -187,7 +245,7 @@ class LatencyPredictor:
         training_log_filename = f"{self.training_directory}/training_log.dat"
         training_history_filename = f"{self.training_directory}/training_history.json"
 
-        optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
+        self.optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
         criterion_backlog = nn.L1Loss()
         criterion_dropped = nn.CrossEntropyLoss()
         testmodel = NonManualRNN(input_size=self.input_size, hidden_size=self.hidden_size, num_layers=self.num_layers).to(self.device)
@@ -222,10 +280,9 @@ class LatencyPredictor:
                 train_droprate_loss += droprate_loss.item()
                 train_wasserstein_loss += wasserstein_loss.item()
 
-
-                optimizer.zero_grad()  # Zero gradients
+                self.optimizer.zero_grad()  # Zero gradients
                 loss.backward()  # Backpropagation
-                optimizer.step()  # Update parameters
+                self.optimizer.step()  # Update parameters
 
             num_train_samples = len(self.trace_generator.train_loader) * batch_size
             train_loss /= num_train_samples
@@ -279,7 +336,7 @@ class LatencyPredictor:
                 self.best_loss = val_loss
                 self.best_model = deepcopy(self.model.state_dict())
                 self.best_model_epoch = self.epoch
-                self.save_model_state(self.epoch, self.model, optimizer)
+                self.save_model_state(self.epoch, self.model, self.optimizer)
                 new_best_model = True
                 ads_new_model = True
 

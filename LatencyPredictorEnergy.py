@@ -47,6 +47,10 @@ class LatencyPredictorEnergy(LatencyPredictor):
         }
         return extra_model_properties
 
+    def load_extra_model_properties(self, model_properties):
+        self.energy_distance_scale = model_properties['energy_distance_scale']
+        return
+
 
     def train(self, learning_rate=0.001, n_epochs=1, loss_file=None, ads_loss_interval=0):
         self.set_training_directory(create=True)
@@ -55,7 +59,7 @@ class LatencyPredictorEnergy(LatencyPredictor):
         training_log_filename = f"{self.training_directory}/training_log.dat"
         training_history_filename = f"{self.training_directory}/training_history.json"
 
-        optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
+        self.optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
         criterion_backlog = nn.L1Loss()
         criterion_dropped = nn.CrossEntropyLoss()
         testmodel = NonManualRNN(input_size=self.input_size, hidden_size=self.hidden_size, num_layers=self.num_layers).to(self.device)
@@ -83,16 +87,17 @@ class LatencyPredictorEnergy(LatencyPredictor):
                     torch.abs(torch.sum(y_batch[:, :, 1], dim=1) - torch.sum(dropped_pred_binary, dim=1)))
                 wasserstein_loss = stats_loss.torch_wasserstein_loss(y_batch[:, :, 1], dropped_pred_binary)  # .data
                 #energy_loss = self.energy_distance_scale * stats_loss.torch_energy_loss(y_batch[:, :, 1], dropped_pred_binary)
-                energy_loss = torch.tensor(10.0)
-                if backlog_loss < 100:
-                    energy_loss = stats_loss.torch_energy_loss(y_batch[:, :, 1], dropped_pred_binary) #, scaler=2.0)
-                print("-------------")
-                print(f"backlog_loss={backlog_loss:.4f}\tdroprate_loss={droprate_loss:.4f}\tenergy_loss={energy_loss:.4f}\twasserstein_loss={wasserstein_loss:.4f}")
-                print(type(backlog_loss), type(droprate_loss), type(energy_loss))
-                print(f"energy_loss: {energy_loss}")
-                print(f"2.0*energy_loss: {2.0*energy_loss}")
+                #energy_loss = torch.tensor(10.0)
+                #if backlog_loss < 1000:
+                energy_loss = stats_loss.torch_cdf_loss_protected(y_batch[:, :, 1], dropped_pred_binary, p=2, normalize=False)  #/10.0 #, scaler=2.0)
+                #print("-------------")
+                #print(f"backlog_loss={backlog_loss:.4f}\tdroprate_loss={droprate_loss:.4f}\tenergy_loss={energy_loss:.4f}\twasserstein_loss={wasserstein_loss:.4f}")
+                #print(type(backlog_loss), type(droprate_loss), type(energy_loss))
+                #print(f"energy_loss: {energy_loss}")
+                #print(f"2.0*energy_loss: {2.0*energy_loss}")
 
-                loss = backlog_loss + droprate_loss + dropped_loss + energy_loss
+                loss = backlog_loss + droprate_loss + energy_loss
+                #loss = backlog_loss + droprate_loss + dropped_loss + wasserstein_loss
                 train_loss += loss.item()
                 train_backlog_loss += backlog_loss.item()
                 train_dropped_loss += dropped_loss.item()
@@ -100,9 +105,9 @@ class LatencyPredictorEnergy(LatencyPredictor):
                 train_energy_loss += energy_loss.item()
 
 
-                optimizer.zero_grad()  # Zero gradients
+                self.optimizer.zero_grad()  # Zero gradients
                 loss.backward()  # Backpropagation
-                optimizer.step()  # Update parameters
+                self.optimizer.step()  # Update parameters
 
             num_train_samples = len(self.trace_generator.train_loader) * batch_size
             train_loss /= num_train_samples
@@ -156,7 +161,7 @@ class LatencyPredictorEnergy(LatencyPredictor):
                 self.best_loss = val_loss
                 self.best_model = deepcopy(self.model.state_dict())
                 self.best_model_epoch = self.epoch
-                self.save_model_state(self.epoch, self.model, optimizer)
+                self.save_model_state(self.epoch, self.model, self.optimizer)
                 new_best_model = True
                 ads_new_model = True
 
