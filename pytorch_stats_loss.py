@@ -21,6 +21,27 @@ def torch_energy_loss(tensor_a,tensor_b):
     # Compute the energy distance between two 1D distributions.
     return((2**0.5)*torch_cdf_loss(tensor_a,tensor_b,p=2))
 
+def symmetric_earthmover(tensor_a,tensor_b,p=1):
+    """
+    Vectors are not normalized.
+    We compute the sum of the metric forward and backward, to cancel the direction bias.
+    Also no pth roots, because they cause instability.
+    """
+    cdf_tensor_a = torch.cumsum(tensor_a,dim=-1)
+    cdf_tensor_b = torch.cumsum(tensor_b,dim=-1)
+    cdf_tensor_a_rev = torch.cumsum(torch.flip(tensor_a,[-1]),dim=-1)
+    cdf_tensor_b_rev = torch.cumsum(torch.flip(tensor_b,[-1]),dim=-1)
+    if p == 1:
+        cdf_distance = torch.sum(torch.abs((cdf_tensor_a-cdf_tensor_b)),dim=-1)
+        cdf_distance += torch.sum(torch.abs((cdf_tensor_a_rev-cdf_tensor_b_rev)),dim=-1)
+    elif p == 2:
+        cdf_distance = torch.sum(torch.pow((cdf_tensor_a - cdf_tensor_b), 2), dim=-1)
+        cdf_distance += torch.sum(torch.pow((cdf_tensor_a_rev - cdf_tensor_b_rev), 2), dim=-1)
+    else:
+        cdf_distance = torch.sum(torch.pow(torch.abs(cdf_tensor_a-cdf_tensor_b),p),dim=-1)
+        cdf_distance += torch.sum(torch.pow(torch.abs(cdf_tensor_a_rev-cdf_tensor_b_rev),p),dim=-1)
+    return cdf_distance/cdf_tensor_a.shape[-1]
+
 def torch_cdf_loss_protected(tensor_a,tensor_b,p=1, normalize=True):
     # last-dimension is weight distribution
     # p is the norm of the distance, p=1 --> First Wasserstein Distance

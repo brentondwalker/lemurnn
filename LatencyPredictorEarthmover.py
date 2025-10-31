@@ -22,33 +22,28 @@ from LatencyPredictor import LatencyPredictor, NonManualRNN, TrainingRecord
 from TraceGenerator import TraceGenerator
 
 
-class LatencyPredictorEnergy(LatencyPredictor):
+class LatencyPredictorEarthmover(LatencyPredictor):
     """
     A LatencyPredictor is given a packet arrival time and packet size,
     and predicts its latency and drop status.
     """
 
-    model_type = 'rnnenergy'
-    energy_distance_scale = 10
+    model_type = 'rnnearthmover'
+    earthmover_p = 1
 
     def __init__(self, hidden_size, num_layers, trace_generator: TraceGenerator, device=None, seed=None, loadpath=None):
         """
-        Because the superclass init() already creates the training directory and saves the model properties,
-        we would have to set any variables we want before calling the super().init().
-        Which seems like bad practice.
-        So model_type and energy_distance_scale are hard coded in the class, which may be even worse.
+        Use earthmover distance as a metric to compare drop predictions.
         """
         super().__init__(hidden_size, num_layers, trace_generator, device=device, seed=seed, loadpath=loadpath)
 
 
     def get_extra_model_properties(self):
-        extra_model_properties = {
-            'energy_distance_scale': self.energy_distance_scale
-        }
+        extra_model_properties = {'earthmover_p': self.earthmover_p}
         return extra_model_properties
 
     def load_extra_model_properties(self, model_properties):
-        self.energy_distance_scale = model_properties['energy_distance_scale']
+        self.earthmover_p = model_properties['earthmover_p']
         return
 
 
@@ -70,7 +65,7 @@ class LatencyPredictorEnergy(LatencyPredictor):
             self.epoch += 1
             new_best_model = False
             self.model.train()  # Set to training mode
-            train_loss, train_backlog_loss, train_dropped_loss, train_droprate_loss, train_energy_loss = 0, 0, 0, 0, 0
+            train_loss, train_backlog_loss, train_dropped_loss, train_droprate_loss, train_em_loss = 0, 0, 0, 0, 0
             for X_batch, y_batch in self.trace_generator.train_loader:
                 #print(X_batch.shape, y_batch.shape)
                 batch_size, seq_length, _ = X_batch.size()
@@ -85,24 +80,14 @@ class LatencyPredictorEnergy(LatencyPredictor):
                 dropped_loss = criterion_dropped(dropped_pred.view(-1, 2), dropped_target.view(-1))
                 droprate_loss = torch.sum(
                     torch.abs(torch.sum(y_batch[:, :, 1], dim=1) - torch.sum(dropped_pred_binary, dim=1)))
-                wasserstein_loss = stats_loss.torch_wasserstein_loss(y_batch[:, :, 1], dropped_pred_binary)  # .data
-                #energy_loss = self.energy_distance_scale * stats_loss.torch_energy_loss(y_batch[:, :, 1], dropped_pred_binary)
-                #energy_loss = torch.tensor(10.0)
-                #if backlog_loss < 1000:
-                energy_loss = stats_loss.torch_cdf_loss_protected(y_batch[:, :, 1], dropped_pred_binary, p=2, normalize=False)  #/10.0 #, scaler=2.0)
-                #print("-------------")
-                #print(f"backlog_loss={backlog_loss:.4f}\tdroprate_loss={droprate_loss:.4f}\tenergy_loss={energy_loss:.4f}\twasserstein_loss={wasserstein_loss:.4f}")
-                #print(type(backlog_loss), type(droprate_loss), type(energy_loss))
-                #print(f"energy_loss: {energy_loss}")
-                #print(f"2.0*energy_loss: {2.0*energy_loss}")
+                emp_loss = torch.sum(stats_loss.symmetric_earthmover(y_batch[:, :, 1], dropped_pred_binary, p=self.earthmover_p))
 
-                loss = backlog_loss + droprate_loss + energy_loss
-                #loss = backlog_loss + droprate_loss + dropped_loss + wasserstein_loss
+                loss = backlog_loss + droprate_loss + emp_loss
                 train_loss += loss.item()
                 train_backlog_loss += backlog_loss.item()
                 train_dropped_loss += dropped_loss.item()
                 train_droprate_loss += droprate_loss.item()
-                train_energy_loss += energy_loss.item()
+                train_em_loss += emp_loss.item()
 
 
                 self.optimizer.zero_grad()  # Zero gradients
@@ -114,16 +99,16 @@ class LatencyPredictorEnergy(LatencyPredictor):
             train_backlog_loss /= num_train_samples
             train_dropped_loss /= num_train_samples
             train_droprate_loss /= num_train_samples
-            train_energy_loss /= num_train_samples
+            train_em_loss /= num_train_samples
 
             train_loss_details = {'backlog_loss': train_backlog_loss,
                                   'dropped_loss': train_dropped_loss,
                                   'droprate_loss': train_droprate_loss,
-                                  'train_energy_loss': train_energy_loss}
+                                  'train_em_loss': train_em_loss}
 
             # Validation step
             self.model.eval()
-            val_loss, v_backlog_loss, v_dropped_loss, v_droprate_loss, v_energy_loss = 0, 0, 0, 0, 0
+            val_loss, v_backlog_loss, v_dropped_loss, v_droprate_loss, v_em_loss = 0, 0, 0, 0, 0
             with torch.no_grad():
                 for X_val, y_val in self.trace_generator.val_loader:
                     batch_size_val, _, _ = X_val.size()
@@ -139,22 +124,19 @@ class LatencyPredictorEnergy(LatencyPredictor):
                     val_dropped_loss = criterion_dropped(dropped_pred_val.view(-1, 2), dropped_target_val.view(-1))
                     val_droprate_loss = torch.sum(
                         torch.abs(torch.sum(y_val[:, :, 1], dim=1) - torch.sum(dropped_pred_val_binary, dim=1)))
-                    val_energy_loss = self.energy_distance_scale * stats_loss.torch_energy_loss(y_val[:, :, 1],
-                                                                             dropped_pred_val_binary)  #.data
-
-                    #val_loss += (val_backlog_loss + val_dropped_loss + val_droprate_loss + val_energy_loss).item()
-                    val_loss += (val_backlog_loss + val_droprate_loss + val_energy_loss).item()
+                    val_em_loss = torch.sum(stats_loss.symmetric_earthmover(y_val[:, :, 1], dropped_pred_val_binary))
+                    val_loss += (val_backlog_loss + val_droprate_loss + val_em_loss).item()
                     v_backlog_loss += val_backlog_loss.item()
                     v_dropped_loss += val_dropped_loss.item()
                     v_droprate_loss += val_droprate_loss.item()
-                    v_energy_loss += val_energy_loss.item()
+                    v_em_loss += val_em_loss.item()
 
             num_val_samples = len(self.trace_generator.val_loader) * batch_size_val
             val_loss /= num_val_samples
             v_backlog_loss /= num_val_samples
             v_dropped_loss /= num_val_samples
             v_droprate_loss /= num_val_samples
-            v_energy_loss /= num_val_samples # XXX not done in notebook
+            v_em_loss /= num_val_samples # XXX not done in notebook
 
             # Check if the current model is the best
             if val_loss < self.best_loss:
@@ -169,11 +151,11 @@ class LatencyPredictorEnergy(LatencyPredictor):
             val_loss_details = {'backlog_loss': v_backlog_loss,
                                   'dropped_loss': v_dropped_loss,
                                   'droprate_loss': v_droprate_loss,
-                                  'energy_loss': v_energy_loss}
+                                  'em_loss': v_em_loss}
 
             # evaluate against test set using the current best model!!
             test_loss, t_backlog_loss, t_backlog_loss_n, t_dropped_loss = 0, 0, 0, 0
-            t_dropped_wa_loss, t_dropped_en_loss, t_dropped_p15_loss = 0, 0, 0
+            t_dropped_em1_loss, t_dropped_em2_loss, t_dropped_em15_loss, t_dropped_emp_loss = 0, 0, 0, 0
             t_droprate_loss = 0.0
             if ads_loss_interval > 0 and ads_new_model and (self.epoch % ads_loss_interval) == 0:
                 ads_loss = {0: 0, 1: 0, 2: 0, 4: 0, 8: 0, 16: 0}
@@ -200,11 +182,11 @@ class LatencyPredictorEnergy(LatencyPredictor):
                     t_backlog_loss += backlog_loss_test.item()
                     t_backlog_loss_n += backlog_loss_test_n.item()
                     t_dropped_loss += dropped_loss_test.item()
-                    t_dropped_wa_loss += stats_loss.torch_wasserstein_loss(y_test[:, :, 1],
-                                                                           dropped_pred_test_binary).item()  #.data
-                    t_dropped_en_loss += self.energy_distance_scale * stats_loss.torch_energy_loss(y_test[:, :, 1], dropped_pred_test_binary).item()  #.data
-                    t_dropped_p15_loss += stats_loss.torch_cdf_loss(y_test[:, :, 1], dropped_pred_test_binary,
-                                                                    p=1.5).item()  #.data
+                    t_dropped_em1_loss += torch.sum(stats_loss.symmetric_earthmover(y_test[:, :, 1], dropped_pred_test_binary, p=1)).item()
+                    t_dropped_em2_loss += torch.sum(stats_loss.symmetric_earthmover(y_test[:, :, 1], dropped_pred_test_binary, p=2)).item()
+                    t_dropped_em15_loss += torch.sum(stats_loss.symmetric_earthmover(y_test[:, :, 1], dropped_pred_test_binary, p=1.5)).item()
+                    t_dropped_emp_loss += torch.sum(stats_loss.symmetric_earthmover(y_test[:, :, 1], dropped_pred_test_binary, p=self.earthmover_p)).item()
+
                     t_droprate_loss += torch.sum(torch.abs(
                         torch.sum(y_test[:, :, 1], dim=1) - torch.sum(dropped_pred_test_binary, dim=1))).item()
                     #print(dropped_pred_test_binary.shape, y_test[0, :, 1].shape)
@@ -223,11 +205,12 @@ class LatencyPredictorEnergy(LatencyPredictor):
             t_backlog_loss /= num_test_samples
             t_backlog_loss_n /= num_test_samples
             t_dropped_loss /= num_test_samples
-            t_dropped_wa_loss /= num_test_samples
-            t_dropped_en_loss /= num_test_samples
-            t_dropped_p15_loss /= num_test_samples
+            t_dropped_em1_loss /= num_test_samples
+            t_dropped_em2_loss /= num_test_samples
+            t_dropped_em15_loss /= num_test_samples
+            t_dropped_emp_loss /= num_test_samples
             t_droprate_loss /= num_test_samples
-            test_loss = t_backlog_loss + t_droprate_loss + t_dropped_en_loss
+            test_loss = t_backlog_loss + t_droprate_loss + t_dropped_emp_loss
             if new_best_model:
                 self.prediction_plot(test_index=0, data_set_name='test', display_plot=False, save_png=True, print_stats=False, file_suffix=f"_epoch{self.epoch}")
             if ads_loss_interval > 0 and ads_new_model and (self.epoch % ads_loss_interval) == 0:
@@ -242,18 +225,18 @@ class LatencyPredictorEnergy(LatencyPredictor):
                                  'backlog_loss_n': t_backlog_loss_n,
                                  'dropped_loss': t_dropped_loss,
                                  'droprate_loss': t_droprate_loss,
-                                 'wasserstein_loss': t_dropped_wa_loss,
+                                 'earthmover_loss': t_dropped_emp_loss,
                                  'ads_loss': ads_loss}
 
             print(f"Epoch {self.epoch + 1}: Train: {train_loss:.4f} , Val: {val_loss:.4f} , Test: {test_loss:.4f}")
-            print(f"\tTBLoss: {t_backlog_loss:.4f}, TBLossN: {t_backlog_loss_n:.4f}, TDLoss: {t_dropped_loss:.4f} , TDWA {t_dropped_wa_loss:.4f} , TDEN: {t_dropped_en_loss:.4f} , TDP15: {t_dropped_p15_loss:.4f}")
+            print(f"\tTBLoss: {t_backlog_loss:.4f}, TBLossN: {t_backlog_loss_n:.4f}, TDLoss: {t_dropped_loss:.4f} , TDEM1 {t_dropped_em1_loss:.4f} , TDEM2: {t_dropped_em2_loss:.4f} , TDEM15: {t_dropped_em15_loss:.4f}")
             print(f"\tTADSLoss: {ads_str}")
             print(f"\tTDroprateLoss: {t_droprate_loss}")
 
             # get the current model parameters
             with open(training_log_filename, "a", buffering=1) as loss_file:
                 loss_file.write(
-                    f"{self.epoch}\t{train_loss:.4f}\t{val_loss:.4f}\t{test_loss:.4f}\t{self.best_loss:.4f}\t{t_backlog_loss:.4f}\t{t_backlog_loss_n:.4f}\t{t_dropped_loss:.4f}\t{t_dropped_wa_loss:.4f}\t{t_dropped_en_loss:.4f}\t{t_dropped_p15_loss:.4f}\t{t_droprate_loss:.4f}\t{ads_str}\t{self.best_model_epoch}\n")
+                    f"{self.epoch}\t{train_loss:.4f}\t{val_loss:.4f}\t{test_loss:.4f}\t{self.best_loss:.4f}\t{t_backlog_loss:.4f}\t{t_backlog_loss_n:.4f}\t{t_dropped_loss:.4f}\t{t_dropped_em1_loss:.4f}\t{t_dropped_em2_loss:.4f}\t{t_dropped_em15_loss:.4f}\t{t_droprate_loss:.4f}\t{ads_str}\t{self.best_model_epoch}\n")
 
             self.training_history.append(TrainingRecord(self.epoch, self.learning_rate, self.best_model_file,
                 train_loss, val_loss, test_loss,

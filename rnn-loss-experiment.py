@@ -2,10 +2,11 @@
 
 import argparse
 
-from LatencyPredictorEnergy import LatencyPredictorEnergy
 from TraceGenerator import *
-from LatencyPredictor import *
 from TraceGeneratorCodel import TraceGeneratorCodel
+from LatencyPredictor import *
+from LatencyPredictorEarthmover import LatencyPredictorEarthmover
+from LatencyPredictorEnergy import LatencyPredictorEnergy
 
 
 def main():
@@ -25,6 +26,7 @@ def main():
     parser.add_argument("-a", '--compute_ads_loss', action='store_true')
     parser.add_argument('--codel', action='store_true')
     parser.add_argument('--energy', action='store_true')
+    parser.add_argument('--earthmover', action='store_true')
 
     args = parser.parse_args()
 
@@ -42,6 +44,7 @@ def main():
     torch_seed = args.torch_seed
     codel = args.codel
     energy = args.energy
+    earthmover = args.earthmover
     if compute_ads_loss:
         ads_loss_interval = 100
 
@@ -65,7 +68,9 @@ def main():
                                    1024*kilo_test_samples, seq_len*2,
                                    seed=data_seed)
 
-    if (energy):
+    if earthmover:
+        latency_predictor = LatencyPredictorEarthmover(hidden_size=hidden_size, num_layers=num_layers, trace_generator=trace_generator, seed=torch_seed)
+    elif energy:
         latency_predictor = LatencyPredictorEnergy(hidden_size=hidden_size, num_layers=num_layers, trace_generator=trace_generator, seed=torch_seed)
     else:
         latency_predictor = LatencyPredictor(hidden_size=hidden_size, num_layers=num_layers, trace_generator=trace_generator, seed=torch_seed)
