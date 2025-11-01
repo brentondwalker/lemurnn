@@ -18,7 +18,7 @@ import pytorch_stats_loss as stats_loss
 import torch.utils.data as data
 from torch.utils.data import DataLoader, TensorDataset
 
-from LatencyPredictor import LatencyPredictor, NonManualRNN, TrainingRecord
+from LatencyPredictor import LatencyPredictor, NonManualRNN, TrainingRecord, GradientTracker
 from TraceGenerator import TraceGenerator
 
 
@@ -46,7 +46,6 @@ class LatencyPredictorEarthmover(LatencyPredictor):
         self.earthmover_p = model_properties['earthmover_p']
         return
 
-
     def train(self, learning_rate=0.001, n_epochs=1, loss_file=None, ads_loss_interval=0):
         self.set_training_directory(create=True)
         self.learning_rate = learning_rate
@@ -59,13 +58,21 @@ class LatencyPredictorEarthmover(LatencyPredictor):
         criterion_dropped = nn.CrossEntropyLoss()
         testmodel = NonManualRNN(input_size=self.input_size, hidden_size=self.hidden_size, num_layers=self.num_layers).to(self.device)
         ads_loss = {0: 0, 1: 0, 2: 0, 4: 0, 8: 0, 16: 0}
+        grad_tracker_backlog = GradientTracker('backlog', self.training_directory)
+        grad_tracker_dropped = GradientTracker('dropped', self.training_directory)
+        grad_tracker_droprate = GradientTracker('droprate', self.training_directory)
+        grad_tracker_emp = GradientTracker('emp', self.training_directory)
         ads_new_model = False
-
         for epoch_i in range(n_epochs):
             self.epoch += 1
+            grad_tracker_backlog.clear()
+            grad_tracker_dropped.clear()
+            grad_tracker_droprate.clear()
+            grad_tracker_emp.clear()
             new_best_model = False
             self.model.train()  # Set to training mode
             train_loss, train_backlog_loss, train_dropped_loss, train_droprate_loss, train_em_loss = 0, 0, 0, 0, 0
+
             for X_batch, y_batch in self.trace_generator.train_loader:
                 #print(X_batch.shape, y_batch.shape)
                 batch_size, seq_length, _ = X_batch.size()
@@ -82,13 +89,25 @@ class LatencyPredictorEarthmover(LatencyPredictor):
                     torch.abs(torch.sum(y_batch[:, :, 1], dim=1) - torch.sum(dropped_pred_binary, dim=1)))
                 emp_loss = torch.sum(stats_loss.symmetric_earthmover(y_batch[:, :, 1], dropped_pred_binary, p=self.earthmover_p))
 
-                loss = backlog_loss + droprate_loss + emp_loss
+                #print(droprate_loss.requires_grad, emp_loss.requires_grad)
+                #loss = backlog_loss + droprate_loss + emp_loss
+                loss = backlog_loss + droprate_loss + dropped_loss + emp_loss
                 train_loss += loss.item()
                 train_backlog_loss += backlog_loss.item()
                 train_dropped_loss += dropped_loss.item()
                 train_droprate_loss += droprate_loss.item()
                 train_em_loss += emp_loss.item()
 
+                self.optimizer.zero_grad()  # Zero gradients
+                #print("--------------------------------")
+                backlog_grads = torch.autograd.grad(outputs=backlog_loss, inputs=self.model.parameters(), retain_graph=True)
+                grad_tracker_backlog.add([torch.linalg.norm(xx) for xx in backlog_grads])
+                dropped_grads = torch.autograd.grad(dropped_loss, self.model.parameters(), retain_graph=True)
+                grad_tracker_dropped.add([torch.linalg.norm(xx) for xx in dropped_grads])
+                droprate_grads = torch.autograd.grad(droprate_loss, self.model.parameters(), retain_graph=True)
+                grad_tracker_droprate.add([torch.linalg.norm(xx) for xx in droprate_grads])
+                emp_grads = torch.autograd.grad(emp_loss, self.model.parameters(), retain_graph=True)
+                grad_tracker_emp.add([torch.linalg.norm(xx) for xx in emp_grads])
 
                 self.optimizer.zero_grad()  # Zero gradients
                 loss.backward()  # Backpropagation
@@ -105,6 +124,11 @@ class LatencyPredictorEarthmover(LatencyPredictor):
                                   'dropped_loss': train_dropped_loss,
                                   'droprate_loss': train_droprate_loss,
                                   'train_em_loss': train_em_loss}
+
+            grad_tracker_backlog.write(self.epoch, num_samples=num_train_samples)
+            grad_tracker_dropped.write(self.epoch, num_samples=num_train_samples)
+            grad_tracker_droprate.write(self.epoch, num_samples=num_train_samples)
+            grad_tracker_emp.write(self.epoch, num_samples=num_train_samples)
 
             # Validation step
             self.model.eval()
@@ -125,7 +149,8 @@ class LatencyPredictorEarthmover(LatencyPredictor):
                     val_droprate_loss = torch.sum(
                         torch.abs(torch.sum(y_val[:, :, 1], dim=1) - torch.sum(dropped_pred_val_binary, dim=1)))
                     val_em_loss = torch.sum(stats_loss.symmetric_earthmover(y_val[:, :, 1], dropped_pred_val_binary))
-                    val_loss += (val_backlog_loss + val_droprate_loss + val_em_loss).item()
+                    #val_loss += (val_backlog_loss + val_droprate_loss + val_em_loss).item()
+                    val_loss += (val_backlog_loss + val_em_loss).item()
                     v_backlog_loss += val_backlog_loss.item()
                     v_dropped_loss += val_dropped_loss.item()
                     v_droprate_loss += val_droprate_loss.item()
@@ -229,9 +254,10 @@ class LatencyPredictorEarthmover(LatencyPredictor):
                                  'ads_loss': ads_loss}
 
             print(f"Epoch {self.epoch + 1}: Train: {train_loss:.4f} , Val: {val_loss:.4f} , Test: {test_loss:.4f}")
-            print(f"\tTBLoss: {t_backlog_loss:.4f}, TBLossN: {t_backlog_loss_n:.4f}, TDLoss: {t_dropped_loss:.4f} , TDEM1 {t_dropped_em1_loss:.4f} , TDEM2: {t_dropped_em2_loss:.4f} , TDEM15: {t_dropped_em15_loss:.4f}")
+            print(f"\tTBLoss: {t_backlog_loss:.4f}, TBLossN: {t_backlog_loss_n:.4f}, TDLoss: {t_dropped_loss:.4f} , TDRLoss: {t_droprate_loss:.4f} , TDEM1 {t_dropped_em1_loss:.4f} , TDEM2: {t_dropped_em2_loss:.4f} , TDEM15: {t_dropped_em15_loss:.4f}")
             print(f"\tTADSLoss: {ads_str}")
             print(f"\tTDroprateLoss: {t_droprate_loss}")
+            print("\n".join([xx.get_str(num_samples=num_train_samples) for xx in [grad_tracker_backlog, grad_tracker_dropped, grad_tracker_droprate, grad_tracker_emp]]))
 
             # get the current model parameters
             with open(training_log_filename, "a", buffering=1) as loss_file:

@@ -41,6 +41,49 @@ class NonManualRNN(nn.Module):
 
         return backlog_out, dropped_out, hidden
 
+class GradientTracker:
+    name = "unnamed"
+    grads = None
+    sum = 0.0
+    training_directory = None
+    filename = None
+    epoch = 0
+
+    def __init__(self, name="unnamed", training_directory=None):
+        self.name = name
+        self.sum = 0.0
+        self.grads = None
+        self.epoch = 0
+        if training_directory:
+            if os.path.isdir(training_directory):
+                self.training_directory = training_directory
+                self.filename = f"{self.training_directory}/grad-tracker-{self.name}.dat"
+            else:
+                print(f"ERROR: GradientTracker: directory does not exist: {training_directory}")
+
+    def clear(self):
+        self.grads = None
+        self.sum = 0.0
+
+    def add(self, gl):
+        if not self.grads:
+            self.grads = [g.item() for g in gl]
+        else:
+            self.grads = [g1+g2.item() for g1,g2 in zip(self.grads, gl)]
+        self.sum = sum(self.grads)
+
+    def write(self, epoch=None, num_samples=1):
+        if epoch:
+            self.epoch = epoch
+        if self.filename:
+            with open(self.filename, "a") as loss_file:
+                loss_file.write(f"{self.epoch}\t{(self.sum/num_samples):.4f}\t{"\t".join([f"{(x/num_samples):.4f}" for x in self.grads])}\n")
+        self.epoch += 1
+
+    def get_str(self, num_samples=1):
+        return f"{self.name}\t{(self.sum/num_samples):.4f}\t{"\t".join([f"{(x/num_samples):.4f}" for x in self.grads])}"
+
+
 @dataclass
 class TrainingRecord:
     epoch:int
