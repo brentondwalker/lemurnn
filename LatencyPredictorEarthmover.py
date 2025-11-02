@@ -3,7 +3,6 @@ import json
 from copy import deepcopy
 import torch
 import torch.nn as nn
-import torch.optim as optim
 import pytorch_stats_loss as stats_loss
 from LatencyPredictor import LatencyPredictor, TrainingRecord, GradientTracker
 from LinkEmuModel import LinkEmuModel
@@ -45,7 +44,7 @@ class LatencyPredictorEarthmover(LatencyPredictor):
         criterion_backlog = nn.L1Loss()
         criterion_dropped = nn.CrossEntropyLoss()
         #testmodel = NonManualRNN(input_size=self.input_size, hidden_size=self.hidden_size, num_layers=self.num_layers).to(self.device)
-        testmodel = self.model.new_instance()
+        testmodel = self.model.new_instance().to(self.device)
         ads_loss = {0: 0, 1: 0, 2: 0, 4: 0, 8: 0, 16: 0}
         grad_tracker_backlog = GradientTracker('backlog', self.training_directory)
         grad_tracker_dropped = GradientTracker('dropped', self.training_directory)
@@ -225,7 +224,7 @@ class LatencyPredictorEarthmover(LatencyPredictor):
             t_dropped_em15_loss /= num_test_samples
             t_dropped_emp_loss /= num_test_samples
             t_droprate_loss /= num_test_samples
-            test_loss = t_backlog_loss + t_droprate_loss + t_dropped_emp_loss
+            test_loss = t_backlog_loss + t_dropped_emp_loss
             if new_best_model:
                 self.prediction_plot(test_index=0, data_set_name='test', display_plot=False, save_png=True, print_stats=False, file_suffix=f"_epoch{self.epoch}")
             if ads_loss_interval > 0 and ads_new_model and (self.epoch % ads_loss_interval) == 0:

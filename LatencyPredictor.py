@@ -53,11 +53,14 @@ class GradientTracker:
             self.epoch = epoch
         if self.filename:
             with open(self.filename, "a") as loss_file:
-                loss_file.write(f"{self.epoch}\t{(self.sum/num_samples):.4f}\t{"\t".join([f"{(x/num_samples):.4f}" for x in self.grads])}\n")
+                # no nested f-strings in python older than 3.12
+                grad_string = "\t".join([f"{(x/num_samples):.4f}" for x in self.grads])
+                loss_file.write(f"{self.epoch}\t{(self.sum/num_samples):.4f}\t{grad_string}\n")
         self.epoch += 1
 
     def get_str(self, num_samples=1):
-        return f"{self.name}\t{(self.sum/num_samples):.4f}\t{"\t".join([f"{(x/num_samples):.4f}" for x in self.grads])}"
+        grad_string = "\t".join([f"{(x/num_samples):.4f}" for x in self.grads])
+        return f"{self.name}\t{(self.sum/num_samples):.4f}\t{grad_string}"
 
 
 @dataclass
@@ -120,7 +123,7 @@ class LatencyPredictor:
         self.trace_generator = trace_generator
         self.input_size = trace_generator.input_size()
         self.output_size = trace_generator.output_size()
-        self.model = model
+        self.model = model.to(self.device)
         if loadpath:
             self.model.load_model_state(loadpath)
         #else:
@@ -191,7 +194,7 @@ class LatencyPredictor:
         criterion_backlog = nn.L1Loss()
         criterion_dropped = nn.CrossEntropyLoss()
         #testmodel = NonManualRNN(input_size=self.input_size, hidden_size=self.hidden_size, num_layers=self.num_layers).to(self.device)
-        testmodel = self.model.new_instance()
+        testmodel = self.model.new_instance().to(self.device)
         ads_loss = {0: 0, 1: 0, 2: 0, 4: 0, 8: 0, 16: 0}
         ads_new_model = False
 
@@ -418,7 +421,7 @@ class LatencyPredictor:
 
         # allocate a model to use for eval
         #eval_model = NonManualRNN(input_size=self.input_size, hidden_size=self.hidden_size, num_layers=self.num_layers)  #.to(self.device)
-        eval_model = self.model.new_instance()
+        eval_model = self.model.new_instance()  #.to(self.device)
         if model_dict:
             eval_model.load_state_dict(model_dict)
         else:
@@ -566,7 +569,7 @@ class LatencyPredictor:
         :return:
         """
         #eval_model = NonManualRNN(input_size=self.input_size, hidden_size=self.hidden_size, num_layers=self.num_layers).to(self.device)
-        eval_model = self.model.new_instance()
+        eval_model = self.model.new_instance().to(self.device)
 
         if model_dict:
             eval_model.load_state_dict(model_dict)
