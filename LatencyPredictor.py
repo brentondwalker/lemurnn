@@ -125,7 +125,7 @@ class LatencyPredictor:
         self.output_size = trace_generator.output_size()
         self.model = model.to(self.device)
         if loadpath:
-            self.model.load_model_state(loadpath)
+            self.model.load_model_state(loadpath, self.device)
         #else:
         #    self.model = NonManualRNN(input_size=self.input_size, hidden_size=self.hidden_size, num_layers=self.num_layers).to(self.device)
         self.best_model = deepcopy(self.model.state_dict())

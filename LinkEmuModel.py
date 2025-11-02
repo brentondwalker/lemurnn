@@ -16,13 +16,16 @@ class LinkEmuModel(nn.Module):
     seed:int = None
 
 
-    def __init__(self, input_size=4, hidden_size=2, num_layers=1, learning_rate=0.001, training_directory=None):
+    def __init__(self, input_size=4, hidden_size=2, num_layers=1, learning_rate=0.001, loadpath=None):
         super(LinkEmuModel, self).__init__()
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.num_layers = num_layers
         self.learning_rate = learning_rate
-        self.training_directory = training_directory
+        if loadpath:
+            print(f"loading model from {loadpath}")
+            self.load_model_properties(loadpath)
+
 
     def set_optimizer(self, optimizer:optim.Optimizer=None, learning_rate=None):
         if not optimizer:
@@ -35,7 +38,7 @@ class LinkEmuModel(nn.Module):
         self.optimizer = optimizer
 
     def new_instance(self):
-        return self.__class__(self.input_size, self.hidden_size, self.num_layers, self.learning_rate, self.training_directory)
+        return self.__class__(self.input_size, self.hidden_size, self.num_layers, self.learning_rate)
 
     def set_training_directory(self, training_directory):
         self.training_directory = training_directory
@@ -68,6 +71,7 @@ class LinkEmuModel(nn.Module):
             self.learning_rate = model_properties['learning_rate']
             self.seed = model_properties['seed']
             self.load_extra_model_properties(model_properties)
+            print(f"\tloaded: input={self.input_size}\thidden={self.hidden_size}\tlayers={self.num_layers}")
 
     def load_extra_model_properties(self, model_properties):
         return
@@ -88,7 +92,7 @@ class LinkEmuModel(nn.Module):
         filepath = f"{self.training_directory}/modelstate-{epoch}.json"
         torch.save(state, filepath)
 
-    def load_model_state(self, directory, epoch=-1):
+    def load_model_state(self, directory, device, epoch=-1):
         """
         Loads the specified model and optimizer state, and sets the class epoch.
         If you pass in epoch=-1, it will load the most recent model.
@@ -112,10 +116,10 @@ class LinkEmuModel(nn.Module):
 
         state_file_name = f"{directory}/modelstate-{epoch}.json"
         print(f"Loading state: {state_file_name}")
-        state = torch.load(state_file_name, map_location=self.device)
+        state = torch.load(state_file_name, map_location=device)
         #self.model = NonManualRNN(input_size=self.input_size, hidden_size=self.hidden_size, num_layers=self.num_layers).to(self.device)
         self.load_state_dict(state['state_dict'])
-        self.optimizer = optim.Adam(self.model.parameters())
+        self.optimizer = optim.Adam(self.parameters())
         self.optimizer.load_state_dict(state['optimizer'])
         self.epoch = epoch
 
