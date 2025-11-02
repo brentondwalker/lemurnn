@@ -2,6 +2,8 @@
 
 import argparse
 
+from LinkEmuModel import LinkEmuModel
+from NonManualRNN import NonManualRNN
 from TraceGenerator import *
 from TraceGeneratorCodel import TraceGeneratorCodel
 from LatencyPredictor import *
@@ -67,13 +69,18 @@ def main():
                                    1024*kilo_val_samples, seq_len,
                                    1024*kilo_test_samples, seq_len*2,
                                    seed=data_seed)
+    #    def __init__(self, input_size=4, hidden_size=2, num_layers=1, learning_rate=0.001, training_directory=None):
+    model:LinkEmuModel = NonManualRNN(input_size=trace_generator.input_size(),
+                                      hidden_size=hidden_size, num_layers=num_layers,
+                                      learning_rate=learning_rate)
+    model.set_optimizer()
 
     if earthmover:
-        latency_predictor = LatencyPredictorEarthmover(hidden_size=hidden_size, num_layers=num_layers, trace_generator=trace_generator, seed=torch_seed)
+        latency_predictor = LatencyPredictorEarthmover(model, trace_generator=trace_generator, seed=torch_seed)
     elif energy:
-        latency_predictor = LatencyPredictorEnergy(hidden_size=hidden_size, num_layers=num_layers, trace_generator=trace_generator, seed=torch_seed)
+        latency_predictor = LatencyPredictorEnergy(model, trace_generator=trace_generator, seed=torch_seed)
     else:
-        latency_predictor = LatencyPredictor(hidden_size=hidden_size, num_layers=num_layers, trace_generator=trace_generator, seed=torch_seed)
+        latency_predictor = LatencyPredictor(model, trace_generator=trace_generator, seed=torch_seed)
 
     latency_predictor.train(learning_rate=learning_rate, n_epochs=num_epochs, ads_loss_interval=ads_loss_interval)
 

@@ -1,24 +1,12 @@
 import dataclasses
 import json
-import time
-from collections import OrderedDict
 from copy import deepcopy
-import os
-import numpy as np
-import matplotlib.pyplot as plt
-import random
-from dataclasses import dataclass
-from typing import List
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.autograd import Variable
-
 import pytorch_stats_loss as stats_loss
-import torch.utils.data as data
-from torch.utils.data import DataLoader, TensorDataset
-
-from LatencyPredictor import LatencyPredictor, NonManualRNN, TrainingRecord, GradientTracker
+from LatencyPredictor import LatencyPredictor, TrainingRecord, GradientTracker
+from LinkEmuModel import LinkEmuModel
 from TraceGenerator import TraceGenerator
 
 
@@ -31,11 +19,11 @@ class LatencyPredictorEarthmover(LatencyPredictor):
     model_type = 'rnnearthmover'
     earthmover_p = 1
 
-    def __init__(self, hidden_size, num_layers, trace_generator: TraceGenerator, device=None, seed=None, loadpath=None):
+    def __init__(self, model:LinkEmuModel, trace_generator: TraceGenerator, device=None, seed=None, loadpath=None):
         """
         Use earthmover distance as a metric to compare drop predictions.
         """
-        super().__init__(hidden_size, num_layers, trace_generator, device=device, seed=seed, loadpath=loadpath)
+        super().__init__(model, trace_generator, device=device, seed=seed, loadpath=loadpath)
 
 
     def get_extra_model_properties(self):
@@ -49,14 +37,15 @@ class LatencyPredictorEarthmover(LatencyPredictor):
     def train(self, learning_rate=0.001, n_epochs=1, loss_file=None, ads_loss_interval=0):
         self.set_training_directory(create=True)
         self.learning_rate = learning_rate
-        self.save_model_properties()
+        self.model.save_model_properties()
         training_log_filename = f"{self.training_directory}/training_log.dat"
         training_history_filename = f"{self.training_directory}/training_history.json"
 
-        self.optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
+        #self.optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
         criterion_backlog = nn.L1Loss()
         criterion_dropped = nn.CrossEntropyLoss()
-        testmodel = NonManualRNN(input_size=self.input_size, hidden_size=self.hidden_size, num_layers=self.num_layers).to(self.device)
+        #testmodel = NonManualRNN(input_size=self.input_size, hidden_size=self.hidden_size, num_layers=self.num_layers).to(self.device)
+        testmodel = self.model.new_instance()
         ads_loss = {0: 0, 1: 0, 2: 0, 4: 0, 8: 0, 16: 0}
         grad_tracker_backlog = GradientTracker('backlog', self.training_directory)
         grad_tracker_dropped = GradientTracker('dropped', self.training_directory)
@@ -76,7 +65,7 @@ class LatencyPredictorEarthmover(LatencyPredictor):
             for X_batch, y_batch in self.trace_generator.train_loader:
                 #print(X_batch.shape, y_batch.shape)
                 batch_size, seq_length, _ = X_batch.size()
-                hidden = torch.zeros(self.num_layers, batch_size, self.hidden_size).to(self.device)  # Move hidden to same device
+                hidden = torch.zeros(self.model.num_layers, batch_size, self.model.hidden_size).to(self.device)  # Move hidden to same device
 
                 X_batch, y_batch = X_batch.to(self.device), y_batch.to(self.device)
                 backlog_pred, dropped_pred, hidden = self.model(X_batch, hidden.to(self.device))  # Forward pass
@@ -91,14 +80,15 @@ class LatencyPredictorEarthmover(LatencyPredictor):
 
                 #print(droprate_loss.requires_grad, emp_loss.requires_grad)
                 #loss = backlog_loss + droprate_loss + emp_loss
-                loss = backlog_loss + droprate_loss + dropped_loss + emp_loss
+                #loss = backlog_loss + droprate_loss + dropped_loss + emp_loss
+                loss = backlog_loss + dropped_loss + emp_loss
                 train_loss += loss.item()
                 train_backlog_loss += backlog_loss.item()
                 train_dropped_loss += dropped_loss.item()
                 train_droprate_loss += droprate_loss.item()
                 train_em_loss += emp_loss.item()
 
-                self.optimizer.zero_grad()  # Zero gradients
+                self.model.optimizer.zero_grad()  # Zero gradients
                 #print("--------------------------------")
                 backlog_grads = torch.autograd.grad(outputs=backlog_loss, inputs=self.model.parameters(), retain_graph=True)
                 grad_tracker_backlog.add([torch.linalg.norm(xx) for xx in backlog_grads])
@@ -109,9 +99,9 @@ class LatencyPredictorEarthmover(LatencyPredictor):
                 emp_grads = torch.autograd.grad(emp_loss, self.model.parameters(), retain_graph=True)
                 grad_tracker_emp.add([torch.linalg.norm(xx) for xx in emp_grads])
 
-                self.optimizer.zero_grad()  # Zero gradients
+                self.model.optimizer.zero_grad()  # Zero gradients
                 loss.backward()  # Backpropagation
-                self.optimizer.step()  # Update parameters
+                self.model.optimizer.step()  # Update parameters
 
             num_train_samples = len(self.trace_generator.train_loader) * batch_size
             train_loss /= num_train_samples
@@ -136,7 +126,7 @@ class LatencyPredictorEarthmover(LatencyPredictor):
             with torch.no_grad():
                 for X_val, y_val in self.trace_generator.val_loader:
                     batch_size_val, _, _ = X_val.size()
-                    hidden = torch.zeros(self.num_layers, batch_size_val, self.hidden_size).to(self.device)
+                    hidden = torch.zeros(self.model.num_layers, batch_size_val, self.model.hidden_size).to(self.device)
 
                     X_val, y_val = X_val.to(self.device), y_val.to(self.device)
                     backlog_target_val = y_val[:, :, 0].unsqueeze(-1)
@@ -169,7 +159,7 @@ class LatencyPredictorEarthmover(LatencyPredictor):
                 self.best_loss = val_loss
                 self.best_model = deepcopy(self.model.state_dict())
                 self.best_model_epoch = self.epoch
-                self.save_model_state(self.epoch, self.model, self.optimizer)
+                self.model.save_model_state(self.epoch)
                 new_best_model = True
                 ads_new_model = True
 
@@ -190,7 +180,7 @@ class LatencyPredictorEarthmover(LatencyPredictor):
             with torch.no_grad():
                 for X_test, y_test in self.trace_generator.test_loader:
                     batch_size_test, _, _ = X_test.size()
-                    hidden = torch.zeros(self.num_layers, batch_size_test, self.hidden_size).to(self.device)
+                    hidden = torch.zeros(self.model.num_layers, batch_size_test, self.model.hidden_size).to(self.device)
 
                     X_test, y_test = X_test.to(self.device), y_test.to(self.device)
                     backlog_target_test = y_test[:, :, 0].unsqueeze(-1)

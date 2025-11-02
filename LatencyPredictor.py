@@ -1,45 +1,21 @@
 import dataclasses
 import json
-import re
 import time
-from collections import OrderedDict
 from copy import deepcopy
 import os
 import numpy as np
 import matplotlib.pyplot as plt
-import random
 from dataclasses import dataclass
 from typing import List
 import torch
 import torch.nn as nn
-import torch.optim as optim
 from torch.autograd import Variable
-
 import pytorch_stats_loss as stats_loss
-import torch.utils.data as data
-from torch.utils.data import DataLoader, TensorDataset
 
+from LinkEmuModel import LinkEmuModel
 from TraceGenerator import TraceGenerator
 
 
-class NonManualRNN(nn.Module):
-    def __init__(self, input_size=4, hidden_size=2, num_layers=1):
-        super(NonManualRNN, self).__init__()
-        self.rnn = nn.RNN(input_size=input_size, hidden_size=hidden_size, num_layers=num_layers,
-                          nonlinearity="relu", batch_first=True)
-
-        # 1 for backlog + 2 or 1?? for dropped classification）
-        self.fc = nn.Linear(in_features=hidden_size, out_features=3)
-
-    def forward(self, x, hidden):
-        out, hidden = self.rnn(x, hidden)
-        combined_out = self.fc(out)
-
-        # split backlog and dropped
-        backlog_out = combined_out[:, :, 0:1]
-        dropped_out = combined_out[:, :, 1:3]
-
-        return backlog_out, dropped_out, hidden
 
 class GradientTracker:
     name = "unnamed"
@@ -105,13 +81,13 @@ class LatencyPredictor:
 
     device = None
     model_type = "rnn"
-    hidden_size:int
-    num_layers:int
-    input_size:int
+    #hidden_size:int
+    #num_layers:int
+    #input_size:int
     output_size:int
-    model:NonManualRNN = None
+    model:LinkEmuModel = None
     learning_rate:float
-    optimizer:optim.Optimizer = None
+    #optimizer:optim.Optimizer = None
     best_model = None
     best_model_file:str = None
     best_model_epoch:int = None
@@ -123,11 +99,9 @@ class LatencyPredictor:
     training_directory = None
     seed = None
 
-    def __init__(self, hidden_size, num_layers, trace_generator:TraceGenerator, device=None, seed=None, loadpath=None):
+    def __init__(self, model:LinkEmuModel, trace_generator:TraceGenerator, device=None, seed=None, loadpath=None):
         """
         XXX in the case of loadpath, we should load all the model info from the
-        :param hidden_size:
-        :param num_layers:
         :param trace_generator:
         :param device:
         :param seed:
@@ -141,15 +115,16 @@ class LatencyPredictor:
         if self.seed:
             torch.manual_seed(self.seed)
         self.epoch = -1
-        self.hidden_size = hidden_size
-        self.num_layers = num_layers
+        #self.hidden_size = hidden_size
+        #self.num_layers = num_layers
         self.trace_generator = trace_generator
         self.input_size = trace_generator.input_size()
         self.output_size = trace_generator.output_size()
+        self.model = model
         if loadpath:
-            self.load_model_state(loadpath)
-        else:
-            self.model = NonManualRNN(input_size=self.input_size, hidden_size=self.hidden_size, num_layers=self.num_layers).to(self.device)
+            self.model.load_model_state(loadpath)
+        #else:
+        #    self.model = NonManualRNN(input_size=self.input_size, hidden_size=self.hidden_size, num_layers=self.num_layers).to(self.device)
         self.best_model = deepcopy(self.model.state_dict())
         self.best_model_epoch = -1
 
@@ -161,37 +136,6 @@ class LatencyPredictor:
         self.trace_generator.save_dataset_properties(f"{self.training_directory}/dataset-properties.json")
 
 
-    def save_model_properties(self):
-        model_properties_filename = f"{self.training_directory}/model-properties.json"
-        model_properties = {'input_size': self.input_size,
-                            'output_size': self.output_size,
-                            'hidden_size': self.hidden_size,
-                            'num_layers': self.num_layers,
-                            'learning_rate': self.learning_rate,
-                            'seed': self.seed}
-        # add any attributes that are specific to subclasses
-        model_properties = dict(list(model_properties.items()) + list(self.get_extra_model_properties().items()))
-        with open(model_properties_filename, "w") as model_properties_file:
-            model_properties_file.write(json.dumps(model_properties))
-            model_properties_file.write("\n")
-
-    def get_extra_model_properties(self):
-        extra_model_properties = {}
-        return extra_model_properties
-
-    def load_model_properties(self, loadpath):
-        with open(f"{loadpath}/model-properties.json") as f:
-            model_properties = json.load(f)
-            self.input_size = model_properties['input_size']
-            self.output_size = model_properties['output_size']
-            self.hidden_size = model_properties['hidden_size']
-            self.num_layers = model_properties['num_layers']
-            self.learning_rate = model_properties['learning_rate']
-            self.seed = model_properties['seed']
-            self.load_extra_model_properties(model_properties)
-
-    def load_extra_model_properties(self, model_properties):
-        return
 
     def save_link_properties(self):
         link_properties_filename = f"{self.training_directory}/link-properties.json"
@@ -212,12 +156,14 @@ class LatencyPredictor:
             else:
                 print(f"ERROR: training directory does not exist: {path}")
         elif not self.training_directory:
-                self.training_directory = f"{self.data_directory}/model-training/model-{self.model_type}-{self.trace_generator.data_type}-layers{self.num_layers}_hidden{self.hidden_size}-{int(time.time())}"
+                self.training_directory = f"{self.data_directory}/model-training/model-{self.model_type}-{self.trace_generator.data_type}-layers{self.model.num_layers}_hidden{self.model.hidden_size}-{int(time.time())}"
         if create:
             if os.path.isdir(self.training_directory):
                 print(f"WARNING: training dir already exists: {self.training_directory}")
             else:
                 os.makedirs(self.training_directory, exist_ok=True)
+        if self.model:
+            self.model.set_training_directory(self.training_directory)
 
     def get_device(self):
         # Check if GPU is available
@@ -233,65 +179,19 @@ class LatencyPredictor:
         weights = [entry for arr in weight_dict.items() for entry in arr[1].cpu().ravel().numpy().tolist()]
         return "\t".join([str(ww) for ww in weights])
 
-    def save_model_state(self, epoch, model, optimizer):
-        """
-        To load it again:
-        state = torch.load(filepath)
-        model.load_state_dict(state['state_dict'])
-        optimizer.load_state_dict(state['optimizer'])
-        https://stackoverflow.com/questions/42703500/how-do-i-save-a-trained-model-in-pytorch
-        """
-        state = {
-            'epoch': epoch,
-            'state_dict': model.state_dict(),
-            'optimizer': optimizer.state_dict(),
-            }
-        filepath = f"{self.training_directory}/modelstate-{epoch}.json"
-        torch.save(state, filepath)
-
-    def load_model_state(self, directory, epoch=-1):
-        """
-        Loads the specified model and optimizer state, and sets the class epoch.
-        If you pass in epoch=-1, it will load the most recent model.
-        kind-of inconsistent here.  The save function takes arguments, but the load
-        function loads the values directly to the class and returns nothing.
-        :param directory:
-        :param epoch:
-        :return:
-        """
-        if epoch < 0:
-            pattern = re.compile(r'^modelstate-(\d+).json$')
-            numbers = []
-            try:
-                for filename in os.listdir(directory):
-                    match = pattern.match(filename)
-                    if match:
-                        numbers.append(int(match.group(1)))
-            except FileNotFoundError:
-                raise ValueError(f"Directory not found: {directory}")
-            epoch = max(numbers)
-
-        state_file_name = f"{directory}/modelstate-{epoch}.json"
-        print(f"Loading state: {state_file_name}")
-        state = torch.load(state_file_name, map_location=self.device)
-        self.model = NonManualRNN(input_size=self.input_size, hidden_size=self.hidden_size, num_layers=self.num_layers).to(self.device)
-        self.model.load_state_dict(state['state_dict'])
-        self.optimizer = optim.Adam(self.model.parameters())
-        self.optimizer.load_state_dict(state['optimizer'])
-        self.epoch = epoch
-
 
     def train(self, learning_rate=0.001, n_epochs=1, loss_file=None, ads_loss_interval=0):
         self.set_training_directory(create=True)
         self.learning_rate = learning_rate
-        self.save_model_properties()
+        self.model.save_model_properties()
         training_log_filename = f"{self.training_directory}/training_log.dat"
         training_history_filename = f"{self.training_directory}/training_history.json"
 
-        self.optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
+        #self.optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
         criterion_backlog = nn.L1Loss()
         criterion_dropped = nn.CrossEntropyLoss()
-        testmodel = NonManualRNN(input_size=self.input_size, hidden_size=self.hidden_size, num_layers=self.num_layers).to(self.device)
+        #testmodel = NonManualRNN(input_size=self.input_size, hidden_size=self.hidden_size, num_layers=self.num_layers).to(self.device)
+        testmodel = self.model.new_instance()
         ads_loss = {0: 0, 1: 0, 2: 0, 4: 0, 8: 0, 16: 0}
         ads_new_model = False
 
@@ -303,7 +203,7 @@ class LatencyPredictor:
             for X_batch, y_batch in self.trace_generator.train_loader:
                 #print(X_batch.shape, y_batch.shape)
                 batch_size, seq_length, _ = X_batch.size()
-                hidden = torch.zeros(self.num_layers, batch_size, self.hidden_size).to(self.device)  # Move hidden to same device
+                hidden = torch.zeros(self.model.num_layers, batch_size, self.model.hidden_size).to(self.device)  # Move hidden to same device
 
                 X_batch, y_batch = X_batch.to(self.device), y_batch.to(self.device)
                 backlog_pred, dropped_pred, hidden = self.model(X_batch, hidden.to(self.device))  # Forward pass
@@ -323,9 +223,9 @@ class LatencyPredictor:
                 train_droprate_loss += droprate_loss.item()
                 train_wasserstein_loss += wasserstein_loss.item()
 
-                self.optimizer.zero_grad()  # Zero gradients
+                self.model.optimizer.zero_grad()  # Zero gradients
                 loss.backward()  # Backpropagation
-                self.optimizer.step()  # Update parameters
+                self.model.optimizer.step()  # Update parameters
 
             num_train_samples = len(self.trace_generator.train_loader) * batch_size
             train_loss /= num_train_samples
@@ -345,7 +245,7 @@ class LatencyPredictor:
             with torch.no_grad():
                 for X_val, y_val in self.trace_generator.val_loader:
                     batch_size_val, _, _ = X_val.size()
-                    hidden = torch.zeros(self.num_layers, batch_size_val, self.hidden_size).to(self.device)
+                    hidden = torch.zeros(self.model.num_layers, batch_size_val, self.model.hidden_size).to(self.device)
 
                     X_val, y_val = X_val.to(self.device), y_val.to(self.device)
                     backlog_target_val = y_val[:, :, 0].unsqueeze(-1)
@@ -379,7 +279,7 @@ class LatencyPredictor:
                 self.best_loss = val_loss
                 self.best_model = deepcopy(self.model.state_dict())
                 self.best_model_epoch = self.epoch
-                self.save_model_state(self.epoch, self.model, self.optimizer)
+                self.model.save_model_state(self.epoch)
                 new_best_model = True
                 ads_new_model = True
 
@@ -400,7 +300,7 @@ class LatencyPredictor:
             with torch.no_grad():
                 for X_test, y_test in self.trace_generator.test_loader:
                     batch_size_test, _, _ = X_test.size()
-                    hidden = torch.zeros(self.num_layers, batch_size_test, self.hidden_size).to(self.device)
+                    hidden = torch.zeros(self.model.num_layers, batch_size_test, self.model.hidden_size).to(self.device)
 
                     X_test, y_test = X_test.to(self.device), y_test.to(self.device)
                     backlog_target_test = y_test[:, :, 0].unsqueeze(-1)
@@ -517,7 +417,8 @@ class LatencyPredictor:
         dataY = torch.tensor(output_features, dtype=torch.float32).unsqueeze(dim=0)
 
         # allocate a model to use for eval
-        eval_model = NonManualRNN(input_size=self.input_size, hidden_size=self.hidden_size, num_layers=self.num_layers)  #.to(self.device)
+        #eval_model = NonManualRNN(input_size=self.input_size, hidden_size=self.hidden_size, num_layers=self.num_layers)  #.to(self.device)
+        eval_model = self.model.new_instance()
         if model_dict:
             eval_model.load_state_dict(model_dict)
         else:
@@ -527,7 +428,7 @@ class LatencyPredictor:
         wa_dist, wasoft_dist, en_dist, ensoft_dist, p15_dist, p15soft_dist = 0,0,0,0,0,0
 
         with torch.no_grad():
-            hidden = torch.zeros(self.num_layers, dataX.size(0), self.hidden_size)  #.to(self.device)
+            hidden = torch.zeros(self.model.num_layers, dataX.size(0), self.model.hidden_size)  #.to(self.device)
             backlog_pred, dropped_pred, _ = eval_model(dataX, hidden)
             dropped_pred_binary = torch.argmax(dropped_pred, dim=2)
             dropped_pred_softbinary = torch.softmax(dropped_pred, dim=2)
@@ -664,7 +565,8 @@ class LatencyPredictor:
         :param model_dict:
         :return:
         """
-        eval_model = NonManualRNN(input_size=self.input_size, hidden_size=self.hidden_size, num_layers=self.num_layers).to(self.device)
+        #eval_model = NonManualRNN(input_size=self.input_size, hidden_size=self.hidden_size, num_layers=self.num_layers).to(self.device)
+        eval_model = self.model.new_instance()
 
         if model_dict:
             eval_model.load_state_dict(model_dict)
@@ -683,7 +585,7 @@ class LatencyPredictor:
         with torch.no_grad():
             for X_test, y_test in loader:
                 X_test, y_test = X_test.to(self.device), y_test.to(self.device)
-                hidden = torch.zeros(self.num_layers, X_test.size(0), self.hidden_size).to(self.device)
+                hidden = torch.zeros(self.model.num_layers, X_test.size(0), self.model.hidden_size).to(self.device)
                 backlog_pred_test, dropped_pred_test, _ = eval_model(X_test, hidden)
                 dropped_pred_test_binary = torch.argmax(dropped_pred_test, dim=2)
                 dropped_pred_test_softbinary = torch.softmax(dropped_pred_test, dim=2)

@@ -27,10 +27,16 @@ def symmetric_earthmover(tensor_a,tensor_b,p=1):
     We compute the sum of the metric forward and backward, to cancel the direction bias.
     Also no pth roots, because they cause instability.
     """
+    #print(tensor_a.shape, tensor_b.shape)
     cdf_tensor_a = torch.cumsum(tensor_a,dim=-1)
     cdf_tensor_b = torch.cumsum(tensor_b,dim=-1)
     cdf_tensor_a_rev = torch.cumsum(torch.flip(tensor_a,[-1]),dim=-1)
     cdf_tensor_b_rev = torch.cumsum(torch.flip(tensor_b,[-1]),dim=-1)
+    #print("-----------------------------------------------------")
+    #print(tensor_a[0,:])
+    #print(tensor_b[0,:])
+    #print(torch.flip(tensor_a,[-1])[0,:])
+    #print(torch.flip(tensor_b,[-1])[0,:])
     if p == 1:
         cdf_distance = torch.sum(torch.abs((cdf_tensor_a-cdf_tensor_b)),dim=-1)
         cdf_distance += torch.sum(torch.abs((cdf_tensor_a_rev-cdf_tensor_b_rev)),dim=-1)
