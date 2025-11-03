@@ -9,8 +9,6 @@ import matplotlib.pyplot as plt
 from dataclasses import dataclass
 from typing import List
 import torch
-import torch.nn as nn
-import torch.optim as optim
 import torch.utils.data as data
 from torch.utils.data import DataLoader, TensorDataset
 
@@ -41,28 +39,25 @@ class TraceSample:
     dropped_indices:List[int]
 
 class TraceGenerator:
-    seed = None
-    test_seed = None
     data_type = 'bytequeue'
-    input_str = ''
-    output_str = ''
-    link_properties: LinkProperties = None
-    num_training_samples, seq_length_training = 0, 0
-    num_val_samples, seq_length_val = 0, 0
-    num_test_samples, seq_length_test = 0, 0
-    trace_data = {}
-    dataX_tensor_v, dataY_tensor_v = None, None
-    dataX_val_tensor_v, dataY_val_tensor_v = None, None
-    dataX_test_tensor_v, dataY_test_tensor_v = None, None
-    train_loader:data.DataLoader = None
-    val_loader:data.DataLoader = None
-    test_loader:data.DataLoader = None
 
     def __init__(self, link_properties:LinkProperties, input_str='bscq', output_str='bd'):
         self.link_properties = link_properties
         self.input_str = input_str
         self.output_str = output_str
         self.data_type = 'bytequeue'
+        self.seed = None
+        self.test_seed = None
+        self.num_training_samples, self.seq_length_training = 0, 0
+        self.num_val_samples, self.seq_length_val = 0, 0
+        self.num_test_samples, self.seq_length_test = 0, 0
+        self.trace_data = {}
+        self.dataX_tensor_v, self.dataY_tensor_v = None, None
+        self.dataX_val_tensor_v, self.dataY_val_tensor_v = None, None
+        self.dataX_test_tensor_v, self.dataY_test_tensor_v = None, None
+        self.train_loader: data.DataLoader = None
+        self.val_loader: data.DataLoader = None
+        self.test_loader: data.DataLoader = None
 
     def save_dataset_properties(self, filename):
         dataset_properties = {

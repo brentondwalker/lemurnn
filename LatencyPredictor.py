@@ -18,18 +18,16 @@ from TraceGenerator import TraceGenerator
 
 
 class GradientTracker:
-    name = "unnamed"
-    grads = None
-    sum = 0.0
-    training_directory = None
-    filename = None
-    epoch = 0
 
     def __init__(self, name="unnamed", training_directory=None):
         self.name = name
         self.sum = 0.0
         self.grads = None
         self.epoch = 0
+        self.training_directory = None
+        self.filename = None
+        self.epoch = 0
+
         if training_directory:
             if os.path.isdir(training_directory):
                 self.training_directory = training_directory
@@ -82,25 +80,7 @@ class LatencyPredictor:
     and predicts its latency and drop status.
     """
 
-    device = None
     model_type = "rnn"
-    #hidden_size:int
-    #num_layers:int
-    #input_size:int
-    output_size:int
-    model:LinkEmuModel = None
-    learning_rate:float
-    #optimizer:optim.Optimizer = None
-    best_model = None
-    best_model_file:str = None
-    best_model_epoch:int = None
-    best_loss = np.inf
-    trace_generator:TraceGenerator = None
-    epoch = 0
-    training_history:List[TrainingRecord] = []
-    data_directory = None
-    training_directory = None
-    seed = None
 
     def __init__(self, model:LinkEmuModel, trace_generator:TraceGenerator, device=None, seed=None, loadpath=None):
         """
@@ -123,21 +103,25 @@ class LatencyPredictor:
         self.trace_generator = trace_generator
         self.input_size = trace_generator.input_size()
         self.output_size = trace_generator.output_size()
-        self.model = model.to(self.device)
+        self.model:LinkEmuModel = model.to(self.device)
         if loadpath:
             self.model.load_model_state(loadpath, self.device)
         #else:
         #    self.model = NonManualRNN(input_size=self.input_size, hidden_size=self.hidden_size, num_layers=self.num_layers).to(self.device)
         self.best_model = deepcopy(self.model.state_dict())
+        self.best_model_file: str = None
         self.best_model_epoch = -1
 
         #last_best_model = None
         self.best_loss = np.inf
         self.set_data_directory(os.getcwd())
+        self.training_directory = None
         self.set_training_directory(create=True)
         self.save_link_properties()
         self.trace_generator.save_dataset_properties(f"{self.training_directory}/dataset-properties.json")
 
+        self.training_history: List[TrainingRecord] = []
+        self.data_directory = None
 
 
     def save_link_properties(self):

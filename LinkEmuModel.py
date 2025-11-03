@@ -7,14 +7,6 @@ import torch.nn as nn
 from torch import optim
 
 class LinkEmuModel(nn.Module):
-    input_size:int = None
-    hidden_size:int = None
-    num_layers:int = None
-    learning_rate:float = 0.001
-    optimizer: optim.Optimizer = None
-    training_directory = None
-    seed:int = None
-
 
     def __init__(self, input_size=4, hidden_size=2, num_layers=1, learning_rate=0.001, loadpath=None):
         super(LinkEmuModel, self).__init__()
@@ -25,7 +17,9 @@ class LinkEmuModel(nn.Module):
         if loadpath:
             print(f"loading model from {loadpath}")
             self.load_model_properties(loadpath)
-
+        self.optimizer: optim.Optimizer = None
+        self.training_directory = None
+        self.seed: int = None
 
     def set_optimizer(self, optimizer:optim.Optimizer=None, learning_rate=None):
         if not optimizer:

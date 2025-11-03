@@ -17,7 +17,6 @@ class LatencyPredictorEnergy(LatencyPredictor):
     """
 
     model_type = 'rnnenergy'
-    energy_distance_scale = 10
 
     def __init__(self, model:LinkEmuModel, trace_generator: TraceGenerator, device=None, seed=None, loadpath=None):
         """
@@ -26,6 +25,7 @@ class LatencyPredictorEnergy(LatencyPredictor):
         Which seems like bad practice.
         So model_type and energy_distance_scale are hard coded in the class, which may be even worse.
         """
+        self.energy_distance_scale = 10
         super().__init__(model, trace_generator, device=device, seed=seed, loadpath=loadpath)
 
 

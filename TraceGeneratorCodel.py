@@ -18,14 +18,12 @@ from TraceGenerator import TraceGenerator, LinkProperties, TraceSample
 
 
 class TraceGeneratorCodel(TraceGenerator):
-    base_interval = 10
-    interval_denominator = 1
-    codel_threshold = 5
 
     def __init__(self, link_properties: LinkProperties, input_str='bscq', output_str='bd', base_interval=10, codel_threshold=5):
         super().__init__(link_properties, input_str, output_str)
         self.base_interval = base_interval
         self.codel_threshold = codel_threshold
+        self.interval_denominator = 1
         self.data_type = 'codel'
 
 
