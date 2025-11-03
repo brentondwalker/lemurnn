@@ -25,10 +25,12 @@ def main():
     parser.add_argument('--data_seed', type=int, default=None)
     parser.add_argument('--torch_seed', type=int, default=None)
     parser.add_argument("-r", '--learning_rate', type=float, default=0.001)
+    parser.add_argument("-d", '--dropout_rate', type=float, default=0.0)
     parser.add_argument("-a", '--compute_ads_loss', action='store_true')
     parser.add_argument('--codel', action='store_true')
     parser.add_argument('--energy', action='store_true')
     parser.add_argument('--earthmover', action='store_true')
+    parser.add_argument('--tanh', action='store_true')
 
     args = parser.parse_args()
 
@@ -42,11 +44,15 @@ def main():
     kilo_test_samples = args.kilo_test_samples
     seq_len = args.seq_len
     learning_rate = args.learning_rate
+    dropout_rate = args.dropout_rate
     data_seed = args.data_seed
     torch_seed = args.torch_seed
     codel = args.codel
     energy = args.energy
     earthmover = args.earthmover
+    nonlinearity = 'relu'
+    if args.tanh:
+        nonlinearity = 'tanh'
     if compute_ads_loss:
         ads_loss_interval = 100
 
@@ -72,7 +78,8 @@ def main():
     #    def __init__(self, input_size=4, hidden_size=2, num_layers=1, learning_rate=0.001, training_directory=None):
     model:LinkEmuModel = NonManualRNN(input_size=trace_generator.input_size(),
                                       hidden_size=hidden_size, num_layers=num_layers,
-                                      learning_rate=learning_rate)
+                                      learning_rate=learning_rate, dropout_rate=dropout_rate,
+                                      nonlinearity=nonlinearity)
     model.set_optimizer()
 
     if earthmover:
