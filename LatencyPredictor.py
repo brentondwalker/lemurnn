@@ -19,7 +19,8 @@ from TraceGenerator import TraceGenerator
 
 class GradientTracker:
 
-    def __init__(self, name="unnamed", training_directory=None):
+    def __init__(self, name="unnamed", training_directory=None, track_grad=True):
+        self.track_grad = track_grad   # can disable the tracker
         self.name = name
         self.sum = 0.0
         self.grads = None
@@ -39,25 +40,32 @@ class GradientTracker:
         self.grads = None
         self.sum = 0.0
 
-    def add(self, gl):
-        if not self.grads:
-            self.grads = [g.item() for g in gl]
-        else:
-            self.grads = [g1+g2.item() for g1,g2 in zip(self.grads, gl)]
-        self.sum = sum(self.grads)
+    def add(self, loss, model:LinkEmuModel):
+        if self.track_grad:
+            gtree = torch.autograd.grad(outputs=loss, inputs=model.parameters(), retain_graph=True)
+            if gtree:
+                gl = [torch.linalg.norm(xx) for xx in gtree]
+                if not self.grads:
+                    self.grads = [g.item() for g in gl]
+                else:
+                    self.grads = [g1 + g2.item() for g1, g2 in zip(self.grads, gl)]
+                self.sum = sum(self.grads)
 
     def write(self, epoch=None, num_samples=1):
-        if epoch:
-            self.epoch = epoch
-        if self.filename:
-            with open(self.filename, "a") as loss_file:
-                # no nested f-strings in python older than 3.12
-                grad_string = "\t".join([f"{(x/num_samples):.4f}" for x in self.grads])
-                loss_file.write(f"{self.epoch}\t{(self.sum/num_samples):.4f}\t{grad_string}\n")
-        self.epoch += 1
+        if self.track_grad:
+            if epoch:
+                self.epoch = epoch
+            if self.filename:
+                with open(self.filename, "a") as loss_file:
+                    # no nested f-strings in python older than 3.12
+                    grad_string = "\t".join([f"{(x/num_samples):.4f}" for x in self.grads])
+                    loss_file.write(f"{self.epoch}\t{(self.sum/num_samples):.4f}\t{grad_string}\n")
+            self.epoch += 1
 
     def get_str(self, num_samples=1):
-        grad_string = "\t".join([f"{(x/num_samples):.4f}" for x in self.grads])
+        grad_string = ""
+        if self.grads:
+            grad_string = "\t".join([f"{(x/num_samples):.4f}" for x in self.grads])
         return f"{self.name}\t{(self.sum/num_samples):.4f}\t{grad_string}"
 
 
@@ -82,7 +90,8 @@ class LatencyPredictor:
 
     model_type = "rnn"
 
-    def __init__(self, model:LinkEmuModel, trace_generator:TraceGenerator, device=None, seed=None, loadpath=None):
+    def __init__(self, model:LinkEmuModel, trace_generator:TraceGenerator,
+                 device=None, seed=None, loadpath=None, track_grad=False):
         """
         XXX in the case of loadpath, we should load all the model info from the
         :param trace_generator:
@@ -98,21 +107,16 @@ class LatencyPredictor:
         if self.seed:
             torch.manual_seed(self.seed)
         self.epoch = -1
-        #self.hidden_size = hidden_size
-        #self.num_layers = num_layers
+        self.track_grad = track_grad
         self.trace_generator = trace_generator
         self.input_size = trace_generator.input_size()
         self.output_size = trace_generator.output_size()
         self.model:LinkEmuModel = model.to(self.device)
         if loadpath:
             self.model.load_model_state(loadpath, self.device)
-        #else:
-        #    self.model = NonManualRNN(input_size=self.input_size, hidden_size=self.hidden_size, num_layers=self.num_layers).to(self.device)
         self.best_model = deepcopy(self.model.state_dict())
         self.best_model_file: str = None
         self.best_model_epoch = -1
-
-        #last_best_model = None
         self.best_loss = np.inf
         self.set_data_directory(os.getcwd())
         self.training_directory = None

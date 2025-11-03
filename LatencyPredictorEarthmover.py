@@ -17,12 +17,12 @@ class LatencyPredictorEarthmover(LatencyPredictor):
 
     model_type = 'rnnearthmover'
 
-    def __init__(self, model:LinkEmuModel, trace_generator: TraceGenerator, device=None, seed=None, loadpath=None):
+    def __init__(self, model:LinkEmuModel, trace_generator: TraceGenerator, device=None, seed=None, loadpath=None, track_grad=False):
         """
         Use earthmover distance as a metric to compare drop predictions.
         """
         self.earthmover_p = 1
-        super().__init__(model, trace_generator, device=device, seed=seed, loadpath=loadpath)
+        super().__init__(model, trace_generator, device=device, seed=seed, loadpath=loadpath, track_grad=track_grad)
 
 
     def get_extra_model_properties(self):
@@ -46,10 +46,10 @@ class LatencyPredictorEarthmover(LatencyPredictor):
         #testmodel = NonManualRNN(input_size=self.input_size, hidden_size=self.hidden_size, num_layers=self.num_layers).to(self.device)
         testmodel = self.model.new_instance().to(self.device)
         ads_loss = {0: 0, 1: 0, 2: 0, 4: 0, 8: 0, 16: 0}
-        grad_tracker_backlog = GradientTracker('backlog', self.training_directory)
-        grad_tracker_dropped = GradientTracker('dropped', self.training_directory)
-        grad_tracker_droprate = GradientTracker('droprate', self.training_directory)
-        grad_tracker_emp = GradientTracker('emp', self.training_directory)
+        grad_tracker_backlog = GradientTracker('backlog', self.training_directory, track_grad=self.track_grad)
+        grad_tracker_dropped = GradientTracker('dropped', self.training_directory, track_grad=self.track_grad)
+        grad_tracker_droprate = GradientTracker('droprate', self.training_directory, track_grad=self.track_grad)
+        grad_tracker_emp = GradientTracker('emp', self.training_directory, track_grad=self.track_grad)
         ads_new_model = False
         for epoch_i in range(n_epochs):
             self.epoch += 1
@@ -89,14 +89,14 @@ class LatencyPredictorEarthmover(LatencyPredictor):
 
                 self.model.optimizer.zero_grad()  # Zero gradients
                 #print("--------------------------------")
-                backlog_grads = torch.autograd.grad(outputs=backlog_loss, inputs=self.model.parameters(), retain_graph=True)
-                grad_tracker_backlog.add([torch.linalg.norm(xx) for xx in backlog_grads])
-                dropped_grads = torch.autograd.grad(dropped_loss, self.model.parameters(), retain_graph=True)
-                grad_tracker_dropped.add([torch.linalg.norm(xx) for xx in dropped_grads])
-                droprate_grads = torch.autograd.grad(droprate_loss, self.model.parameters(), retain_graph=True)
-                grad_tracker_droprate.add([torch.linalg.norm(xx) for xx in droprate_grads])
-                emp_grads = torch.autograd.grad(emp_loss, self.model.parameters(), retain_graph=True)
-                grad_tracker_emp.add([torch.linalg.norm(xx) for xx in emp_grads])
+                #backlog_grads = torch.autograd.grad(outputs=backlog_loss, inputs=self.model.parameters(), retain_graph=True)
+                grad_tracker_backlog.add(backlog_loss, self.model)
+                #dropped_grads = torch.autograd.grad(dropped_loss, self.model.parameters(), retain_graph=True)
+                grad_tracker_dropped.add(dropped_loss, self.model)
+                #droprate_grads = torch.autograd.grad(droprate_loss, self.model.parameters(), retain_graph=True)
+                grad_tracker_droprate.add(droprate_loss, self.model)
+                #emp_grads = torch.autograd.grad(emp_loss, self.model.parameters(), retain_graph=True)
+                grad_tracker_emp.add(emp_loss, self.model)
 
                 self.model.optimizer.zero_grad()  # Zero gradients
                 loss.backward()  # Backpropagation
@@ -246,7 +246,8 @@ class LatencyPredictorEarthmover(LatencyPredictor):
             print(f"\tTBLoss: {t_backlog_loss:.4f}, TBLossN: {t_backlog_loss_n:.4f}, TDLoss: {t_dropped_loss:.4f} , TDRLoss: {t_droprate_loss:.4f} , TDEM1 {t_dropped_em1_loss:.4f} , TDEM2: {t_dropped_em2_loss:.4f} , TDEM15: {t_dropped_em15_loss:.4f}")
             print(f"\tTADSLoss: {ads_str}")
             print(f"\tTDroprateLoss: {t_droprate_loss}")
-            print("\n".join([xx.get_str(num_samples=num_train_samples) for xx in [grad_tracker_backlog, grad_tracker_dropped, grad_tracker_droprate, grad_tracker_emp]]))
+            if self.track_grad:
+                print("\n".join([xx.get_str(num_samples=num_train_samples) for xx in [grad_tracker_backlog, grad_tracker_dropped, grad_tracker_droprate, grad_tracker_emp]]))
 
             # get the current model parameters
             with open(training_log_filename, "a", buffering=1) as loss_file:
