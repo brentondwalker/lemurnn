@@ -44,9 +44,14 @@ class TraceGenerator:
         self.dataX_tensor_v, self.dataY_tensor_v = None, None
         self.dataX_val_tensor_v, self.dataY_val_tensor_v = None, None
         self.dataX_test_tensor_v, self.dataY_test_tensor_v = None, None
-        self.train_loader: data.DataLoader = None
-        self.val_loader: data.DataLoader = None
-        self.test_loader: data.DataLoader = None
+        self.loaders = {
+            'train': {},
+            'val':   {},
+            'test':  {}
+        }
+        #self.train_loader: data.DataLoader = None
+        #self.val_loader: data.DataLoader = None
+        #self.test_loader: data.DataLoader = None
 
     def save_dataset_properties(self, filename):
         dataset_properties = {
@@ -207,6 +212,45 @@ class TraceGenerator:
         print(f"Data shape: X - {dataX_tensor_v.shape}, Y - {dataY_tensor_v.shape}")
         return dataX_tensor_v, dataY_tensor_v
 
+    def get_loader(self, data_set_name='train', seq_length=None):
+        if seq_length not in self.loaders[data_set_name]:
+            seq_length = min(self.loaders[data_set_name].keys())
+        return self.loaders[data_set_name][seq_length]
+
+    def create_multiloaders(self, num_training_samples, seq_lengths_training, num_val_samples, seq_lengths_val, num_test_samples, seq_lengths_test, batch_size=64, seed=None):
+        self.seed = seed
+        rng_backup = np.random.get_state()
+        if self.seed:
+            np.random.seed(self.seed)
+
+        # Generate test data first, so it will always be the same, even
+        # if we change the size of training or val sets.
+        self.num_test_samples = num_test_samples
+        self.seq_length_test = seq_lengths_test  # Length of each sequence
+        for seq_length in seq_lengths_test:
+            dataX_test_tensor_v, dataY_test_tensor_v = self.generate_trace_data_set(num_test_samples, seq_length, data_set_name='test')
+            print(dataX_test_tensor_v.shape, dataY_test_tensor_v.shape)
+            self.loaders['test'][seq_length] = data.DataLoader(TensorDataset(dataX_test_tensor_v, dataY_test_tensor_v),
+                                                               shuffle=False, batch_size=batch_size)
+
+        self.num_training_samples = num_training_samples
+        self.seq_length_training = seq_lengths_training
+        for seq_length in seq_lengths_training:
+            dataX_tensor_v, dataY_tensor_v = self.generate_trace_data_set(num_training_samples, seq_length, data_set_name='train')
+            print(dataX_tensor_v.shape, dataY_tensor_v.shape)
+            self.loaders['train'][seq_length] = data.DataLoader(TensorDataset(dataX_test_tensor_v, dataY_test_tensor_v),
+                                                                shuffle=False, batch_size=batch_size)
+
+        self.num_val_samples = num_val_samples  # Number of validation samples
+        self.seq_length_val = seq_lengths_val  # Length of each sequence
+        for seq_length in seq_lengths_val:
+            dataX_val_tensor_v, dataY_val_tensor_v = self.generate_trace_data_set(num_val_samples, seq_length, data_set_name='val')
+            print(dataX_val_tensor_v.shape, dataY_val_tensor_v.shape)
+            self.loaders['val'][seq_length] = data.DataLoader(TensorDataset(dataX_test_tensor_v, dataY_test_tensor_v),
+                                                              shuffle=False, batch_size=batch_size)
+        if self.seed:
+            np.random.set_state(rng_backup)
+
 
     def create_loaders(self, num_training_samples, seq_length_training, num_val_samples, seq_length_val, num_test_samples, seq_length_test, batch_size=64, seed=None):
         self.seed = seed
@@ -234,12 +278,12 @@ class TraceGenerator:
         if self.seed:
             np.random.set_state(rng_backup)
 
-        self.train_loader = data.DataLoader(data.TensorDataset(dataX_tensor_v, dataY_tensor_v), shuffle=True,
-                                       batch_size=batch_size)
-        self.val_loader = data.DataLoader(data.TensorDataset(dataX_val_tensor_v, dataY_val_tensor_v), shuffle=False,
-                                     batch_size=batch_size)
-        self.test_loader = data.DataLoader(TensorDataset(dataX_test_tensor_v, dataY_test_tensor_v), shuffle=False,
-                                      batch_size=batch_size)
+        self.loaders['train'][seq_length_training] = data.DataLoader(data.TensorDataset(dataX_tensor_v, dataY_tensor_v),
+                                                                       shuffle=True, batch_size=batch_size)
+        self.loaders['val'][seq_length_val] = data.DataLoader(data.TensorDataset(dataX_val_tensor_v, dataY_val_tensor_v),
+                                                                shuffle=False, batch_size=batch_size)
+        self.loaders['test'][seq_length_test] = data.DataLoader(TensorDataset(dataX_test_tensor_v, dataY_test_tensor_v),
+                                                                  shuffle=False, batch_size=batch_size)
 
     def plot_inputs(self, index=0, data_set_name='train'):
         plt.rcParams.update({

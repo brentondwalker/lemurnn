@@ -191,7 +191,8 @@ class LatencyPredictor:
             new_best_model = False
             self.model.train()  # Set to training mode
             train_loss, train_backlog_loss, train_dropped_loss, train_droprate_loss, train_wasserstein_loss = 0, 0, 0, 0, 0
-            for X_batch, y_batch in self.trace_generator.train_loader:
+            loader = self.trace_generator.get_loader('train')
+            for X_batch, y_batch in loader:
                 #print(X_batch.shape, y_batch.shape)
                 batch_size, seq_length, _ = X_batch.size()
                 #hidden = torch.zeros(self.model.num_layers, batch_size, self.model.hidden_size).to(self.device)  # Move hidden to same device
@@ -220,7 +221,7 @@ class LatencyPredictor:
                 loss.backward()  # Backpropagation
                 self.model.optimizer.step()  # Update parameters
 
-            num_train_samples = len(self.trace_generator.train_loader) * batch_size
+            num_train_samples = len(loader) * batch_size
             train_loss /= num_train_samples
             train_backlog_loss /= num_train_samples
             train_dropped_loss /= num_train_samples
@@ -236,7 +237,8 @@ class LatencyPredictor:
             self.model.eval()
             val_loss, v_backlog_loss, v_dropped_loss, v_droprate_loss, v_wasserstein_loss = 0, 0, 0, 0, 0
             with torch.no_grad():
-                for X_val, y_val in self.trace_generator.val_loader:
+                loader = self.trace_generator.get_loader('val')
+                for X_val, y_val in loader:
                     batch_size_val, _, _ = X_val.size()
                     #hidden = torch.zeros(self.model.num_layers, batch_size_val, self.model.hidden_size).to(self.device)
                     hidden = self.model.new_hidden_tensor(batch_size_val, self.device)
@@ -260,7 +262,7 @@ class LatencyPredictor:
                     v_droprate_loss += val_droprate_loss.item()
                     v_wasserstein_loss += val_wasserstein_loss.item()
 
-            num_val_samples = len(self.trace_generator.val_loader) * batch_size_val
+            num_val_samples = len(loader) * batch_size_val
             val_loss /= num_val_samples
             v_backlog_loss /= num_val_samples
             v_dropped_loss /= num_val_samples
@@ -292,7 +294,8 @@ class LatencyPredictor:
             testmodel.eval()  # Ensure evaluation mode
 
             with torch.no_grad():
-                for X_test, y_test in self.trace_generator.test_loader:
+                loader = self.trace_generator.get_loader('test')
+                for X_test, y_test in loader:
                     batch_size_test, _, _ = X_test.size()
                     #hidden = torch.zeros(self.model.num_layers, batch_size_test, self.model.hidden_size).to(self.device)
                     hidden = self.model.new_hidden_tensor(batch_size_test, self.device)
@@ -331,7 +334,7 @@ class LatencyPredictor:
                                 radius *= 2
                             #print(f"{self.epoch}.{i}\t{ads_loss}")
 
-            num_test_samples = len(self.trace_generator.test_loader) * batch_size_test
+            num_test_samples = len(loader) * batch_size_test
             t_backlog_loss /= num_test_samples
             t_backlog_loss_n /= num_test_samples
             t_dropped_loss /= num_test_samples
