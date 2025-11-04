@@ -43,5 +43,15 @@ link_properties_library = {
                                min_pkt_size=500,
                                max_pkt_size=1500,
                                min_queue_bytes=5 * 1000,
-                               max_queue_bytes=10 * 1000)  # 10 average-sized packets
+                               max_queue_bytes=10 * 1000),  # 10 average-sized packets
+
+    '1Mbps-exact': LinkProperties(min_arrival_rate=125,  # 125 pkt/s ~~ 1Mbps
+                               max_arrival_rate=125,  # 1250 pkt/s ~~ 10Mbps
+                               min_capacity=6.25e5,  # 6.25e5 B/s = 5 Mbps
+                               max_capacity=6.25e5,  # 1.5e6 B/s = 12 Mbps
+                               min_pkt_size=500,
+                               max_pkt_size=1500,
+                               min_queue_bytes=5 * 1000,
+                               max_queue_bytes=10 * 1000),  # 10 average-sized packets
+
 }

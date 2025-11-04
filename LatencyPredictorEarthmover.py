@@ -64,7 +64,8 @@ class LatencyPredictorEarthmover(LatencyPredictor):
             for X_batch, y_batch in self.trace_generator.train_loader:
                 #print(X_batch.shape, y_batch.shape)
                 batch_size, seq_length, _ = X_batch.size()
-                hidden = torch.zeros(self.model.num_layers, batch_size, self.model.hidden_size).to(self.device)  # Move hidden to same device
+                #hidden = torch.zeros(self.model.num_layers, batch_size, self.model.hidden_size).to(self.device)  # Move hidden to same device
+                hidden = self.model.new_hidden_tensor(batch_size).to(self.device)
 
                 X_batch, y_batch = X_batch.to(self.device), y_batch.to(self.device)
                 backlog_pred, dropped_pred, hidden = self.model(X_batch, hidden.to(self.device))  # Forward pass
@@ -125,7 +126,8 @@ class LatencyPredictorEarthmover(LatencyPredictor):
             with torch.no_grad():
                 for X_val, y_val in self.trace_generator.val_loader:
                     batch_size_val, _, _ = X_val.size()
-                    hidden = torch.zeros(self.model.num_layers, batch_size_val, self.model.hidden_size).to(self.device)
+                    #hidden = torch.zeros(self.model.num_layers, batch_size_val, self.model.hidden_size).to(self.device)
+                    hidden = self.model.new_hidden_tensor(batch_size_val).to(self.device)
 
                     X_val, y_val = X_val.to(self.device), y_val.to(self.device)
                     backlog_target_val = y_val[:, :, 0].unsqueeze(-1)
@@ -179,7 +181,8 @@ class LatencyPredictorEarthmover(LatencyPredictor):
             with torch.no_grad():
                 for X_test, y_test in self.trace_generator.test_loader:
                     batch_size_test, _, _ = X_test.size()
-                    hidden = torch.zeros(self.model.num_layers, batch_size_test, self.model.hidden_size).to(self.device)
+                    #hidden = torch.zeros(self.model.num_layers, batch_size_test, self.model.hidden_size).to(self.device)
+                    hidden = self.model.new_hidden_tensor(batch_size_test).to(self.device)
 
                     X_test, y_test = X_test.to(self.device), y_test.to(self.device)
                     backlog_target_test = y_test[:, :, 0].unsqueeze(-1)

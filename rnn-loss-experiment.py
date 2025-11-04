@@ -2,6 +2,8 @@
 
 import argparse
 
+from DropLSTM import DropLSTM
+from DropReluLSTM import DropReluLSTM
 from LinkEmuModel import LinkEmuModel
 from LinkProperties import link_properties_library
 from NonManualRNN import NonManualRNN
@@ -34,6 +36,8 @@ def main():
     parser.add_argument('--energy', action='store_true')
     parser.add_argument('--earthmover', action='store_true')
     parser.add_argument('--tanh', action='store_true')
+    parser.add_argument('--relu_lstm', action='store_true')
+    parser.add_argument('--lstm', action='store_true')
 
     args = parser.parse_args()
 
@@ -55,6 +59,8 @@ def main():
     codel = args.codel
     energy = args.energy
     earthmover = args.earthmover
+    use_relu_lstm = args.relu_lstm
+    use_lstm = args.lstm
     nonlinearity = 'relu'
     if args.tanh:
         nonlinearity = 'tanh'
@@ -73,13 +79,22 @@ def main():
 
     trace_generator.create_loaders(1024*kilo_training_samples, seq_len,
                                    1024*kilo_val_samples, seq_len,
-                                   1024*kilo_test_samples, seq_len*2,
+                                   1024*kilo_test_samples, seq_len,   #1024*kilo_test_samples, seq_len*2,
                                    seed=data_seed)
-    #    def __init__(self, input_size=4, hidden_size=2, num_layers=1, learning_rate=0.001, training_directory=None):
-    model:LinkEmuModel = NonManualRNN(input_size=trace_generator.input_size(),
-                                      hidden_size=hidden_size, num_layers=num_layers,
-                                      learning_rate=learning_rate, dropout_rate=dropout_rate,
-                                      nonlinearity=nonlinearity)
+
+    if use_relu_lstm:
+        model:LinkEmuModel = DropReluLSTM(input_size=trace_generator.input_size(),
+                                          hidden_size=hidden_size, num_layers=num_layers,
+                                          learning_rate=learning_rate, dropout_rate=dropout_rate)
+    elif use_lstm:
+        model: LinkEmuModel = DropLSTM(input_size=trace_generator.input_size(),
+                                           hidden_size=hidden_size, num_layers=num_layers,
+                                           learning_rate=learning_rate, dropout_rate=dropout_rate)
+    else:
+        model:LinkEmuModel = NonManualRNN(input_size=trace_generator.input_size(),
+                                          hidden_size=hidden_size, num_layers=num_layers,
+                                          learning_rate=learning_rate, dropout_rate=dropout_rate,
+                                          nonlinearity=nonlinearity)
     model.set_optimizer()
 
     if earthmover:

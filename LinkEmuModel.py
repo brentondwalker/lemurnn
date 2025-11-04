@@ -34,6 +34,9 @@ class LinkEmuModel(nn.Module):
     def new_instance(self):
         return self.__class__(self.input_size, self.hidden_size, self.num_layers, self.learning_rate)
 
+    def new_hidden_tensor(self, batch_size:int, device=None):
+        return None
+
     def set_training_directory(self, training_directory):
         self.training_directory = training_directory
 
