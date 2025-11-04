@@ -77,9 +77,9 @@ def main():
     else:
         trace_generator = TraceGenerator(link_properties)
 
-    trace_generator.create_loaders(1024*kilo_training_samples, seq_len,
-                                   1024*kilo_val_samples, seq_len,
-                                   1024*kilo_test_samples, seq_len,   #1024*kilo_test_samples, seq_len*2,
+    trace_generator.create_multiloaders(1024*kilo_training_samples, [4, 8, 16, 32, 64, 128, 256],
+                                   1024*kilo_val_samples, [seq_len],
+                                   1024*kilo_test_samples, [seq_len],   #1024*kilo_test_samples, seq_len*2,
                                    seed=data_seed)
 
     if use_relu_lstm:

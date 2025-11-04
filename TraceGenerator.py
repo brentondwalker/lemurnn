@@ -217,6 +217,9 @@ class TraceGenerator:
             seq_length = min(self.loaders[data_set_name].keys())
         return self.loaders[data_set_name][seq_length]
 
+    def get_loader_iterator(self, data_set_name='train'):
+        return self.loaders[data_set_name].values()
+
     def create_multiloaders(self, num_training_samples, seq_lengths_training, num_val_samples, seq_lengths_val, num_test_samples, seq_lengths_test, batch_size=64, seed=None):
         self.seed = seed
         rng_backup = np.random.get_state()

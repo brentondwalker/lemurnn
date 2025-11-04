@@ -60,50 +60,51 @@ class LatencyPredictorEarthmover(LatencyPredictor):
             new_best_model = False
             self.model.train()  # Set to training mode
             train_loss, train_backlog_loss, train_dropped_loss, train_droprate_loss, train_em_loss = 0, 0, 0, 0, 0
+            num_train_samples = 0
+            for loader in self.trace_generator.get_loader_iterator('train'):
+                for X_batch, y_batch in loader:
+                    #print(X_batch.shape, y_batch.shape)
+                    batch_size, seq_length, _ = X_batch.size()
+                    #hidden = torch.zeros(self.model.num_layers, batch_size, self.model.hidden_size).to(self.device)  # Move hidden to same device
+                    hidden = self.model.new_hidden_tensor(batch_size).to(self.device)
 
-            for X_batch, y_batch in self.trace_generator.train_loader:
-                #print(X_batch.shape, y_batch.shape)
-                batch_size, seq_length, _ = X_batch.size()
-                #hidden = torch.zeros(self.model.num_layers, batch_size, self.model.hidden_size).to(self.device)  # Move hidden to same device
-                hidden = self.model.new_hidden_tensor(batch_size).to(self.device)
+                    X_batch, y_batch = X_batch.to(self.device), y_batch.to(self.device)
+                    backlog_pred, dropped_pred, hidden = self.model(X_batch, hidden.to(self.device))  # Forward pass
+                    backlog_target = y_batch[:, :, 0].unsqueeze(-1)  # Shape: [batch_size, seq_length, 1]
+                    dropped_target = y_batch[:, :, 1].long()  # Shape: [batch_size, seq_length] (for CrossEntropyLoss)
+                    dropped_pred_binary = torch.softmax(dropped_pred, dim=2)[:, :, 1]
+                    backlog_loss = criterion_backlog(backlog_pred, backlog_target)
+                    dropped_loss = criterion_dropped(dropped_pred.view(-1, 2), dropped_target.view(-1))
+                    droprate_loss = torch.sum(
+                        torch.abs(torch.sum(y_batch[:, :, 1], dim=1) - torch.sum(dropped_pred_binary, dim=1)))
+                    emp_loss = torch.sum(stats_loss.symmetric_earthmover(y_batch[:, :, 1], dropped_pred_binary, p=self.earthmover_p))
 
-                X_batch, y_batch = X_batch.to(self.device), y_batch.to(self.device)
-                backlog_pred, dropped_pred, hidden = self.model(X_batch, hidden.to(self.device))  # Forward pass
-                backlog_target = y_batch[:, :, 0].unsqueeze(-1)  # Shape: [batch_size, seq_length, 1]
-                dropped_target = y_batch[:, :, 1].long()  # Shape: [batch_size, seq_length] (for CrossEntropyLoss)
-                dropped_pred_binary = torch.softmax(dropped_pred, dim=2)[:, :, 1]
-                backlog_loss = criterion_backlog(backlog_pred, backlog_target)
-                dropped_loss = criterion_dropped(dropped_pred.view(-1, 2), dropped_target.view(-1))
-                droprate_loss = torch.sum(
-                    torch.abs(torch.sum(y_batch[:, :, 1], dim=1) - torch.sum(dropped_pred_binary, dim=1)))
-                emp_loss = torch.sum(stats_loss.symmetric_earthmover(y_batch[:, :, 1], dropped_pred_binary, p=self.earthmover_p))
+                    #print(droprate_loss.requires_grad, emp_loss.requires_grad)
+                    #loss = backlog_loss + droprate_loss + emp_loss
+                    #loss = backlog_loss + droprate_loss + dropped_loss + emp_loss
+                    loss = backlog_loss + dropped_loss + emp_loss
+                    train_loss += loss.item()
+                    train_backlog_loss += backlog_loss.item()
+                    train_dropped_loss += dropped_loss.item()
+                    train_droprate_loss += droprate_loss.item()
+                    train_em_loss += emp_loss.item()
 
-                #print(droprate_loss.requires_grad, emp_loss.requires_grad)
-                #loss = backlog_loss + droprate_loss + emp_loss
-                #loss = backlog_loss + droprate_loss + dropped_loss + emp_loss
-                loss = backlog_loss + dropped_loss + emp_loss
-                train_loss += loss.item()
-                train_backlog_loss += backlog_loss.item()
-                train_dropped_loss += dropped_loss.item()
-                train_droprate_loss += droprate_loss.item()
-                train_em_loss += emp_loss.item()
+                    self.model.optimizer.zero_grad()  # Zero gradients
+                    #print("--------------------------------")
+                    #backlog_grads = torch.autograd.grad(outputs=backlog_loss, inputs=self.model.parameters(), retain_graph=True)
+                    grad_tracker_backlog.add(backlog_loss, self.model)
+                    #dropped_grads = torch.autograd.grad(dropped_loss, self.model.parameters(), retain_graph=True)
+                    grad_tracker_dropped.add(dropped_loss, self.model)
+                    #droprate_grads = torch.autograd.grad(droprate_loss, self.model.parameters(), retain_graph=True)
+                    grad_tracker_droprate.add(droprate_loss, self.model)
+                    #emp_grads = torch.autograd.grad(emp_loss, self.model.parameters(), retain_graph=True)
+                    grad_tracker_emp.add(emp_loss, self.model)
 
-                self.model.optimizer.zero_grad()  # Zero gradients
-                #print("--------------------------------")
-                #backlog_grads = torch.autograd.grad(outputs=backlog_loss, inputs=self.model.parameters(), retain_graph=True)
-                grad_tracker_backlog.add(backlog_loss, self.model)
-                #dropped_grads = torch.autograd.grad(dropped_loss, self.model.parameters(), retain_graph=True)
-                grad_tracker_dropped.add(dropped_loss, self.model)
-                #droprate_grads = torch.autograd.grad(droprate_loss, self.model.parameters(), retain_graph=True)
-                grad_tracker_droprate.add(droprate_loss, self.model)
-                #emp_grads = torch.autograd.grad(emp_loss, self.model.parameters(), retain_graph=True)
-                grad_tracker_emp.add(emp_loss, self.model)
+                    self.model.optimizer.zero_grad()  # Zero gradients
+                    loss.backward()  # Backpropagation
+                    self.model.optimizer.step()  # Update parameters
 
-                self.model.optimizer.zero_grad()  # Zero gradients
-                loss.backward()  # Backpropagation
-                self.model.optimizer.step()  # Update parameters
-
-            num_train_samples = len(self.trace_generator.train_loader) * batch_size
+                num_train_samples += len(loader) * batch_size
             train_loss /= num_train_samples
             train_backlog_loss /= num_train_samples
             train_dropped_loss /= num_train_samples
@@ -124,7 +125,8 @@ class LatencyPredictorEarthmover(LatencyPredictor):
             self.model.eval()
             val_loss, v_backlog_loss, v_dropped_loss, v_droprate_loss, v_em_loss = 0, 0, 0, 0, 0
             with torch.no_grad():
-                for X_val, y_val in self.trace_generator.val_loader:
+                loader = self.trace_generator.get_loader('val')
+                for X_val, y_val in loader:
                     batch_size_val, _, _ = X_val.size()
                     #hidden = torch.zeros(self.model.num_layers, batch_size_val, self.model.hidden_size).to(self.device)
                     hidden = self.model.new_hidden_tensor(batch_size_val).to(self.device)
@@ -147,7 +149,7 @@ class LatencyPredictorEarthmover(LatencyPredictor):
                     v_droprate_loss += val_droprate_loss.item()
                     v_em_loss += val_em_loss.item()
 
-            num_val_samples = len(self.trace_generator.val_loader) * batch_size_val
+            num_val_samples = len(loader) * batch_size_val
             val_loss /= num_val_samples
             v_backlog_loss /= num_val_samples
             v_dropped_loss /= num_val_samples
@@ -179,7 +181,8 @@ class LatencyPredictorEarthmover(LatencyPredictor):
             testmodel.eval()  # Ensure evaluation mode
 
             with torch.no_grad():
-                for X_test, y_test in self.trace_generator.test_loader:
+                loader = self.trace_generator.get_loader('test')
+                for X_test, y_test in loader:
                     batch_size_test, _, _ = X_test.size()
                     #hidden = torch.zeros(self.model.num_layers, batch_size_test, self.model.hidden_size).to(self.device)
                     hidden = self.model.new_hidden_tensor(batch_size_test).to(self.device)
@@ -218,7 +221,7 @@ class LatencyPredictorEarthmover(LatencyPredictor):
                                 radius *= 2
                             #print(f"{self.epoch}.{i}\t{ads_loss}")
 
-            num_test_samples = len(self.trace_generator.test_loader) * batch_size_test
+            num_test_samples = len(loader) * batch_size_test
             t_backlog_loss /= num_test_samples
             t_backlog_loss_n /= num_test_samples
             t_dropped_loss /= num_test_samples

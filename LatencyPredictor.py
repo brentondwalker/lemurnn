@@ -191,37 +191,39 @@ class LatencyPredictor:
             new_best_model = False
             self.model.train()  # Set to training mode
             train_loss, train_backlog_loss, train_dropped_loss, train_droprate_loss, train_wasserstein_loss = 0, 0, 0, 0, 0
-            loader = self.trace_generator.get_loader('train')
-            for X_batch, y_batch in loader:
-                #print(X_batch.shape, y_batch.shape)
-                batch_size, seq_length, _ = X_batch.size()
-                #hidden = torch.zeros(self.model.num_layers, batch_size, self.model.hidden_size).to(self.device)  # Move hidden to same device
-                hidden = self.model.new_hidden_tensor(batch_size, self.device)
+            #loader = self.trace_generator.get_loader('train')
+            num_train_samples = 0
+            for loader in self.trace_generator.get_loader_iterator('train'):
+                for X_batch, y_batch in loader:
+                    #print(X_batch.shape, y_batch.shape)
+                    batch_size, seq_length, _ = X_batch.size()
+                    #hidden = torch.zeros(self.model.num_layers, batch_size, self.model.hidden_size).to(self.device)  # Move hidden to same device
+                    hidden = self.model.new_hidden_tensor(batch_size, self.device)
 
-                X_batch, y_batch = X_batch.to(self.device), y_batch.to(self.device)
-                backlog_pred, dropped_pred, hidden = self.model(X_batch, hidden)  # Forward pass
-                backlog_target = y_batch[:, :, 0].unsqueeze(-1)  # Shape: [batch_size, seq_length, 1]
-                dropped_target = y_batch[:, :, 1].long()  # Shape: [batch_size, seq_length] (for CrossEntropyLoss)
-                dropped_pred_binary = torch.softmax(dropped_pred, dim=2)[:, :, 1]
-                backlog_loss = criterion_backlog(backlog_pred, backlog_target)
-                dropped_loss = criterion_dropped(dropped_pred.view(-1, 2), dropped_target.view(-1))
-                droprate_loss = torch.sum(
-                    torch.abs(torch.sum(y_batch[:, :, 1], dim=1) - torch.sum(dropped_pred_binary, dim=1)))
-                wasserstein_loss = stats_loss.torch_wasserstein_loss(y_batch[:, :, 1], dropped_pred_binary)  # .data
+                    X_batch, y_batch = X_batch.to(self.device), y_batch.to(self.device)
+                    backlog_pred, dropped_pred, hidden = self.model(X_batch, hidden)  # Forward pass
+                    backlog_target = y_batch[:, :, 0].unsqueeze(-1)  # Shape: [batch_size, seq_length, 1]
+                    dropped_target = y_batch[:, :, 1].long()  # Shape: [batch_size, seq_length] (for CrossEntropyLoss)
+                    dropped_pred_binary = torch.softmax(dropped_pred, dim=2)[:, :, 1]
+                    backlog_loss = criterion_backlog(backlog_pred, backlog_target)
+                    dropped_loss = criterion_dropped(dropped_pred.view(-1, 2), dropped_target.view(-1))
+                    droprate_loss = torch.sum(
+                        torch.abs(torch.sum(y_batch[:, :, 1], dim=1) - torch.sum(dropped_pred_binary, dim=1)))
+                    wasserstein_loss = stats_loss.torch_wasserstein_loss(y_batch[:, :, 1], dropped_pred_binary)  # .data
 
-                #loss = backlog_loss + dropped_loss + droprate_loss + wasserstein_loss
-                loss = backlog_loss + dropped_loss
-                train_loss += loss.item()
-                train_backlog_loss += backlog_loss.item()
-                train_dropped_loss += dropped_loss.item()
-                train_droprate_loss += droprate_loss.item()
-                train_wasserstein_loss += wasserstein_loss.item()
+                    #loss = backlog_loss + dropped_loss + droprate_loss + wasserstein_loss
+                    loss = backlog_loss + dropped_loss
+                    train_loss += loss.item()
+                    train_backlog_loss += backlog_loss.item()
+                    train_dropped_loss += dropped_loss.item()
+                    train_droprate_loss += droprate_loss.item()
+                    train_wasserstein_loss += wasserstein_loss.item()
 
-                self.model.optimizer.zero_grad()  # Zero gradients
-                loss.backward()  # Backpropagation
-                self.model.optimizer.step()  # Update parameters
+                    self.model.optimizer.zero_grad()  # Zero gradients
+                    loss.backward()  # Backpropagation
+                    self.model.optimizer.step()  # Update parameters
 
-            num_train_samples = len(loader) * batch_size
+                num_train_samples += len(loader) * batch_size
             train_loss /= num_train_samples
             train_backlog_loss /= num_train_samples
             train_dropped_loss /= num_train_samples
