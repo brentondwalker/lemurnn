@@ -3,6 +3,7 @@
 import argparse
 
 from LinkEmuModel import LinkEmuModel
+from LinkProperties import link_properties_library
 from NonManualRNN import NonManualRNN
 from TraceGenerator import *
 from TraceGeneratorCodel import TraceGeneratorCodel
@@ -15,6 +16,7 @@ def main():
     # configure:
     #num layers
     parser = argparse.ArgumentParser()
+    parser.add_argument('--link_properties', type=str, default='default')
     parser.add_argument("-l", '--num_layers', type=int, default=1)
     parser.add_argument("-s", '--hidden_size', type=int, default=8)
     parser.add_argument("-e", '--num_epochs', type=int, default=100)
@@ -34,6 +36,7 @@ def main():
 
     args = parser.parse_args()
 
+    link_properties_str = args.link_properties
     num_layers = args.num_layers
     hidden_size = args.hidden_size
     num_epochs = args.num_epochs
@@ -56,14 +59,7 @@ def main():
     if compute_ads_loss:
         ads_loss_interval = 100
 
-    link_properties = LinkProperties(min_arrival_rate=0.2,
-                        max_arrival_rate=1,
-                        min_capacity=500,
-                        max_capacity=1000,
-                        min_pkt_size=500,
-                        max_pkt_size=1500,
-                        min_queue_bytes=2500,
-                        max_queue_bytes=10000)
+    link_properties = link_properties_library[link_properties_str]
 
     trace_generator = None
     if codel:

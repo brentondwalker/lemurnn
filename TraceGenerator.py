@@ -11,19 +11,8 @@ from typing import List
 import torch
 import torch.utils.data as data
 from torch.utils.data import DataLoader, TensorDataset
+from LinkProperties import LinkProperties
 
-@dataclass
-class LinkProperties:
-    min_arrival_rate:float
-    max_arrival_rate:float
-    min_capacity: float
-    max_capacity: float
-    min_pkt_size: int
-    max_pkt_size: int
-    min_queue_bytes: int
-    max_queue_bytes:int
-    #inter_pkt_time:float = 1.0  # Average time between packets (seconds per packet)
-    #seq_length:int = 128  # Length of each sequence
 
 @dataclass
 class TraceSample:
@@ -101,7 +90,10 @@ class TraceGenerator:
             np.random.uniform(self.link_properties.min_pkt_size, self.link_properties.max_pkt_size, seq_length))  # Packet size between 60 and 1000 bytes
         capacity_s = np.random.uniform(self.link_properties.min_capacity, self.link_properties.max_capacity)
         capacity_v = np.repeat(capacity_s, seq_length)  # Link capacity (bytes per unit time)
-        queue_bytes_s = np.rint(np.random.uniform(self.link_properties.min_queue_bytes, self.link_properties.max_queue_bytes))  # size of queue in bytes
+        if self.link_properties.max_queue_bytes <= 0:
+            queue_bytes_s = np.inf
+        else:
+            queue_bytes_s = np.rint(np.random.uniform(self.link_properties.min_queue_bytes, self.link_properties.max_queue_bytes))  # size of queue in bytes
         queue_bytes_v = np.repeat(queue_bytes_s, seq_length)
         backlog_v = np.zeros(seq_length)
         latency_v = np.zeros(seq_length)  # Track latency (proportional to backlog)
