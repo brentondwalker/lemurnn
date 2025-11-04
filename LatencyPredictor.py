@@ -403,7 +403,7 @@ class LatencyPredictor:
         """
 
         # first retrieve the data for this test_index
-        input_features, output_features = self.trace_generator.get_sample(test_index=test_index, data_set_name=data_set_name)
+        input_features, output_features = self.trace_generator.get_feature_vector(test_index=test_index, data_set_name=data_set_name)
         dataX  = torch.tensor(input_features, dtype=torch.float32).unsqueeze(dim=0)
         dataY = torch.tensor(output_features, dtype=torch.float32).unsqueeze(dim=0)
 
@@ -473,28 +473,29 @@ class LatencyPredictor:
         })
 
         true_backlog, true_drops, predicted_backlog, predicted_drops = self.predict_sample(test_index=test_index, data_set_name=data_set_name, print_stats=print_stats)
+        pkt_arrival_times_v = self.trace_generator.get_sample(test_index, data_set_name).pkt_arrival_times_v
 
         # turn off interactive mode so plots don't display until we call plt.show()
         plt.ioff()
 
         plt.figure(figsize=(12, 6))
-        plt.plot(true_backlog, label="Generated Backlog", color='green', linewidth=2.5, zorder=1)
-        plt.plot(predicted_backlog, label="Predicted Backlog", linestyle="dashed", color='red', linewidth=2.5, zorder=1)
+        plt.plot(pkt_arrival_times_v, true_backlog, label="Generated Backlog", color='green', linewidth=2.5, zorder=1)
+        plt.plot(pkt_arrival_times_v, predicted_backlog, label="Predicted Backlog", linestyle="dashed", color='red', linewidth=2.5, zorder=1)
 
         # Real dropped packet positions
         drop_indices_real = np.where(true_drops == 1)[0]
-        plt.scatter(drop_indices_real, true_backlog[drop_indices_real], color='blue', marker='x',
+        plt.scatter(pkt_arrival_times_v[drop_indices_real], true_backlog[drop_indices_real], color='blue', marker='x',
                     label="Real Dropped Packets", linewidth=2.5, zorder=2)
 
         # Predicted dropped packet positions
         #drop_indices_pred = np.argmax(predicted_drops, axis=-1)
         #drop_indices_pred = np.where(drop_indices_pred == 1)[0]
         drop_indices_pred = np.where(predicted_drops == 1)[0]
-        plt.scatter(drop_indices_pred, predicted_backlog[drop_indices_pred], color='orange', marker='o',
+        plt.scatter(pkt_arrival_times_v[drop_indices_pred], predicted_backlog[drop_indices_pred], color='orange', marker='o',
                     label="Predicted Dropped Packets", linewidth=2, zorder=2)
 
-        plt.xlabel("Time Step", fontsize=18)
-        plt.ylabel("Backlog (bits)", fontsize=18)
+        plt.xlabel("Time", fontsize=18)
+        plt.ylabel("Backlog", fontsize=18)
         # plt.title("Generated vs Predicted Backlog and Dropped Packets")
         plt.legend()
         plt.grid()
@@ -613,93 +614,3 @@ class LatencyPredictor:
         #print(predicted_drops)
         return real_backlogs, real_drops, predicted_backlogs, predicted_drops
 
-
-    def old_prediction_plot(self, real_backlogs, real_drops, predicted_backlogs, predicted_drops, test_index=0):
-        """
-        Given a bunch of predictions, visualize them.
-
-        :param real_backlogs:
-        :param real_drops:
-        :param predicted_backlogs:
-        :param predicted_drops:
-        :param test_index:
-        :return:
-        """
-        # ============ Visualization ============
-        plt.rcParams.update({
-            'font.size': 20,
-            'font.weight': 'bold',
-            'axes.labelsize': 22,
-            'axes.labelweight': 'bold',
-            'axes.titlesize': 22,
-            'axes.linewidth': 2.0,
-            'xtick.labelsize': 15,
-            'ytick.labelsize': 15,
-            'xtick.major.width': 1.8,
-            'ytick.major.width': 1.8,
-            'xtick.major.size': 8,
-            'ytick.major.size': 8,
-            'legend.fontsize': 14,
-            'legend.frameon': True,
-            'lines.linewidth': 2,
-            'pdf.fonttype': 42  # embed TrueType fonts for LaTeX compatibility
-        })
-
-        plt.figure(figsize=(12, 6))
-        plt.plot(real_backlogs[test_index], label="Generated Backlog", color='green', linewidth=2.5, zorder=1)
-        plt.plot(predicted_backlogs[test_index], label="Predicted Backlog", linestyle="dashed", color='red',
-                 linewidth=2.5, zorder=1)
-
-        # Real dropped packet positions
-        drop_indices_real = np.where(real_drops[test_index] == 1)[0]
-        plt.scatter(drop_indices_real, real_backlogs[test_index, drop_indices_real], color='blue', marker='x',
-                    label="Real Dropped Packets", linewidth=2.5, zorder=2)
-
-        # Predicted dropped packet positions
-        drop_indices_pred = np.argmax(predicted_drops[test_index], axis=-1)
-        drop_indices_pred = np.where(drop_indices_pred == 1)[0]
-        plt.scatter(drop_indices_pred, predicted_backlogs[test_index, drop_indices_pred], color='orange', marker='o',
-                    label="Predicted Dropped Packets", linewidth=2, zorder=2)
-
-        plt.xlabel("Time Step", fontsize=18)
-        plt.ylabel("Backlog (bits)", fontsize=18)
-        # plt.title("Generated vs Predicted Backlog and Dropped Packets")
-        plt.legend()
-        plt.grid()
-        plt.savefig(f"{self.training_directory}/RealvsPreBD_toobusy_new.pdf", format='pdf')
-        plt.show()
-
-        # ============ Drop Position Match Accuracy ============ #
-        # Get sets of real and predicted dropped positions
-        pred_dropped_status = np.argmax(predicted_drops[test_index], axis=-1)
-        real_dropped_status = real_drops[test_index].astype(int)
-
-        pred_indices = set(np.where(pred_dropped_status == 1)[0])
-        real_indices = set(np.where(real_dropped_status == 1)[0])
-        matched = pred_indices & real_indices
-
-        correct = len(matched)
-        total = len(real_indices)
-        accuracy = correct / total * 100 if total > 0 else 0.0
-
-        print(f"Drop position match accuracy (example {test_index}): {accuracy:.2f}% ({correct}/{total})")
-        print("Ground truth dropped positions:", sorted(real_indices))
-        print("Predicted dropped positions:", sorted(pred_indices))
-        print("Correctly predicted positions:", sorted(matched))
-        print(f"Number of drops:  real={len(real_indices)}  predicted={len(pred_indices)}")
-        print(f"adropsim(0) = {self.adropsim(pred_dropped_status, real_dropped_status, 0)}")
-        print(f"adropsim(1) = {self.adropsim(pred_dropped_status, real_dropped_status, 1)}")
-        print(f"adropsim(2) = {self.adropsim(pred_dropped_status, real_dropped_status, 2)}")
-        print(f"adropsim(4) = {self.adropsim(pred_dropped_status, real_dropped_status, 4)}")
-        print(f"adropsim(8) = {self.adropsim(pred_dropped_status, real_dropped_status, 8)}")
-        print(f"adropsim(16) = {self.adropsim(pred_dropped_status, real_dropped_status, 16)}")
-
-        tensor_w1 = Variable(torch.from_numpy(real_dropped_status.astype(dtype=np.float64)))
-        tensor_w2 = Variable(torch.from_numpy(pred_dropped_status.astype(dtype=np.float64)), requires_grad=True)
-        print("\n\nWasserstein Results:")
-        print("Wasserstein loss", stats_loss.torch_wasserstein_loss(tensor_w1, tensor_w2).data,
-              stats_loss.torch_wasserstein_loss(tensor_w1, tensor_w2).requires_grad)
-        print("Energy loss", stats_loss.torch_energy_loss(tensor_w1, tensor_w2).data,
-              stats_loss.torch_wasserstein_loss(tensor_w1, tensor_w2).requires_grad)
-        print("p == 1.5 CDF loss", stats_loss.torch_cdf_loss(tensor_w1, tensor_w2, p=1.5).data)
-        print("Validate Checking Errors:", stats_loss.torch_validate_distibution(tensor_w1, tensor_w2))

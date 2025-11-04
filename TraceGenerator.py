@@ -90,11 +90,15 @@ class TraceGenerator:
             np.random.uniform(self.link_properties.min_pkt_size, self.link_properties.max_pkt_size, seq_length))  # Packet size between 60 and 1000 bytes
         capacity_s = np.random.uniform(self.link_properties.min_capacity, self.link_properties.max_capacity)
         capacity_v = np.repeat(capacity_s, seq_length)  # Link capacity (bytes per unit time)
+
+        # queue size of <= 0 indicates infinite queue
         if self.link_properties.max_queue_bytes <= 0:
+            # but we dont want to pass inf as one of the inputs, so set that to zero
             queue_bytes_s = np.inf
+            queue_bytes_v = np.repeat(0, seq_length)
         else:
             queue_bytes_s = np.rint(np.random.uniform(self.link_properties.min_queue_bytes, self.link_properties.max_queue_bytes))  # size of queue in bytes
-        queue_bytes_v = np.repeat(queue_bytes_s, seq_length)
+            queue_bytes_v = np.repeat(queue_bytes_s, seq_length)
         backlog_v = np.zeros(seq_length)
         latency_v = np.zeros(seq_length)  # Track latency (proportional to backlog)
         queue = pkt_size_v[0]  # Current queue size in bytes
@@ -162,6 +166,9 @@ class TraceGenerator:
 
 
     def get_sample(self, test_index=0, data_set_name='test'):
+        return self.trace_data[data_set_name][test_index]
+
+    def get_feature_vector(self, test_index=0, data_set_name='test'):
         return self.feature_vector_from_sample(self.trace_data[data_set_name][test_index])
 
 
