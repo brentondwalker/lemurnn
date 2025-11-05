@@ -8,8 +8,6 @@ class DropLSTM(LinkEmuModel):
         self.nonlinearity = 'tanh'
         self.dropout_rate = dropout_rate
         super(DropLSTM, self).__init__(input_size=input_size, hidden_size=hidden_size, num_layers=num_layers, learning_rate=learning_rate, loadpath=loadpath)
-        # after calling super(), the internal data fields will be populated.
-        # either from the arguments passed in, or from loading a saved state
         self.lstm = nn.LSTM(input_size=self.input_size, hidden_size=self.hidden_size, num_layers=self.num_layers, batch_first=True)
         if self.dropout_rate > 0:
             self.dropout = nn.Dropout(p=self.dropout_rate)

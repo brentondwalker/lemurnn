@@ -160,7 +160,7 @@ class TraceGenerator:
             output_str = self.output_str
 
         input_features = ()
-        for cc in self.input_str:
+        for cc in input_str:
             if cc == 't':
                 input_features += (trace_sample.inter_pkt_times_v,)
             elif cc == 'b':

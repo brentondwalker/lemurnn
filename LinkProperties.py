@@ -27,6 +27,16 @@ link_properties_library = {
                                    min_queue_bytes=2500,
                                    max_queue_bytes=10000),
 
+    # same scale as default, but with less tendency to produce huge backlogs
+    'default-light': LinkProperties(min_arrival_rate=0.2,
+                              max_arrival_rate=1,
+                              min_capacity=1000,
+                              max_capacity=1200,
+                              min_pkt_size=500,
+                              max_pkt_size=1500,
+                              min_queue_bytes=2500,
+                              max_queue_bytes=10000),
+
     # constant capacity, packet size, arrival rate
     'const-rates':      LinkProperties(min_arrival_rate=1,
                                    max_arrival_rate=1,

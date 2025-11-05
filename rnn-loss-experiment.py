@@ -38,6 +38,8 @@ def main():
     parser.add_argument('--tanh', action='store_true')
     parser.add_argument('--relu_lstm', action='store_true')
     parser.add_argument('--lstm', action='store_true')
+    parser.add_argument('--normalize', action='store_true')
+    parser.add_argument('--multiloader', action='store_true')
 
     args = parser.parse_args()
 
@@ -61,6 +63,8 @@ def main():
     earthmover = args.earthmover
     use_relu_lstm = args.relu_lstm
     use_lstm = args.lstm
+    normalize = args.normalize
+    multiloader = args.multiloader
     nonlinearity = 'relu'
     if args.tanh:
         nonlinearity = 'tanh'
@@ -75,16 +79,18 @@ def main():
     if codel:
         trace_generator = TraceGeneratorCodel(link_properties, base_interval=10, codel_threshold=5)
     else:
-        trace_generator = TraceGenerator(link_properties)
+        trace_generator = TraceGenerator(link_properties, normalize=normalize)
 
-    #trace_generator.create_multiloaders(1024*kilo_training_samples, [4, 8, 16, 32, 64, 128, 256],
-    #                               1024*kilo_val_samples, [seq_len],
-    #                               1024*kilo_test_samples, [seq_len],   #1024*kilo_test_samples, seq_len*2,
-    #                               seed=data_seed)
-    trace_generator.create_multiloaders(1024 * kilo_training_samples, [seq_len],
-                                   1024*kilo_val_samples, [seq_len],
-                                   1024*kilo_test_samples, [seq_len],   #1024*kilo_test_samples, seq_len*2,
-                                   seed=data_seed)
+    if multiloader:
+        trace_generator.create_multiloaders(1024*kilo_training_samples, [4, 8, 16, 32, 64, 128, 256],
+                                       1024*kilo_val_samples, [seq_len],
+                                       1024*kilo_test_samples, [seq_len],   #1024*kilo_test_samples, seq_len*2,
+                                       seed=data_seed)
+    else:
+        trace_generator.create_multiloaders(1024 * kilo_training_samples, [seq_len],
+                                       1024*kilo_val_samples, [seq_len],
+                                       1024*kilo_test_samples, [seq_len],   #1024*kilo_test_samples, seq_len*2,
+                                       seed=data_seed)
 
     if use_relu_lstm:
         model:LinkEmuModel = DropReluLSTM(input_size=trace_generator.input_size(),

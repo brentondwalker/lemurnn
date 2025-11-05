@@ -2,9 +2,7 @@ import torch
 from torch import nn
 from LinkEmuModel import LinkEmuModel
 
-# # LSTM Model Definition, L1loss, with 2 inputs(inter_pkt_times*link_capacity, pkt_sizes )
 
-# Model definition
 class BacklogLSTM(LinkEmuModel):
 
     def __init__(self, input_size=2, hidden_size=10, output_size=1, num_layers=1, learning_rate=0.001, loadpath=None, dropout_rate=0.0):

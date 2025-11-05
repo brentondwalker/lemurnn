@@ -22,7 +22,7 @@ def main():
     # configure:
     #num layers
     parser = argparse.ArgumentParser()
-    #parser.add_argument('--link_properties', type=str, default='default')
+    parser.add_argument('--link_properties', type=str, default='default')
     #parser.add_argument('--infinite_queue', action='store_true')
     parser.add_argument("-l", '--num_layers', type=int, default=1)
     parser.add_argument("-s", '--hidden_size', type=int, default=8)
@@ -37,6 +37,7 @@ def main():
     parser.add_argument("-d", '--dropout_rate', type=float, default=0.0)
     parser.add_argument("-a", '--compute_ads_loss', action='store_true')
     #parser.add_argument('--codel', action='store_true')
+    parser.add_argument('--normalize', action='store_true')
     parser.add_argument('--energy', action='store_true')
     parser.add_argument('--earthmover', action='store_true')
     parser.add_argument('--tanh', action='store_true')
@@ -45,7 +46,7 @@ def main():
 
     args = parser.parse_args()
 
-    link_properties_str = 'const-rates'
+    link_properties_str = args.link_properties
     infinite_queue = True
     num_layers = args.num_layers
     hidden_size = args.hidden_size
@@ -65,7 +66,7 @@ def main():
     earthmover = args.earthmover
     use_relu_lstm = args.relu_lstm
     use_lstm = args.lstm
-    normalize = True
+    normalize = args.normalize
     nonlinearity = 'relu'
     if args.tanh:
         nonlinearity = 'tanh'
@@ -76,13 +77,14 @@ def main():
     if infinite_queue:
         link_properties.infinite_queue()
 
-    trace_generator = TraceGenerator(link_properties, input_str='bs', output_str='b', normalize=normalize)
+    #trace_generator = TraceGenerator(link_properties, input_str='bs', output_str='b', normalize=normalize)
+    trace_generator = TraceGenerator(link_properties, normalize=normalize)
 
     #trace_generator.create_multiloaders(1024*kilo_training_samples, [4, 8, 16, 32, 64, 128, 256],
     #                               1024*kilo_val_samples, [seq_len],
     #                               1024*kilo_test_samples, [seq_len],   #1024*kilo_test_samples, seq_len*2,
     #                               seed=data_seed)
-    trace_generator.create_multiloaders(1024 * kilo_training_samples, [seq_len],
+    trace_generator.create_multiloaders(1024 * kilo_training_samples, [4, 8, 16, 32, 64, 128, 256],
                                    1024*kilo_val_samples, [seq_len],
                                    1024*kilo_test_samples, [seq_len],   #1024*kilo_test_samples, seq_len*2,
                                    seed=data_seed)
