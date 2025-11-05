@@ -27,6 +27,16 @@ link_properties_library = {
                                    min_queue_bytes=2500,
                                    max_queue_bytes=10000),
 
+    # constant capacity, packet size, arrival rate
+    'const-rates':      LinkProperties(min_arrival_rate=1,
+                                   max_arrival_rate=1,
+                                   min_capacity=1000,
+                                   max_capacity=1000,
+                                   min_pkt_size=900,
+                                   max_pkt_size=900,
+                                   min_queue_bytes=0,
+                                   max_queue_bytes=0),
+
     '1-10Mbps':     LinkProperties(min_arrival_rate=125,  # 125 pkt/s ~~ 1Mbps
                                    max_arrival_rate=1250, # 1250 pkt/s ~~ 10Mbps
                                    min_capacity = 6.25e5, # 6.25e5 B/s = 5 Mbps

@@ -27,13 +27,15 @@ class TraceSample:
     dropped_sizes:List[int]
     dropped_indices:List[int]
 
+
 class TraceGenerator:
     data_type = 'bytequeue'
 
-    def __init__(self, link_properties:LinkProperties, input_str='bscq', output_str='bd'):
+    def __init__(self, link_properties:LinkProperties, input_str='bscq', output_str='bd', normalize=False):
         self.link_properties = link_properties
         self.input_str = input_str
         self.output_str = output_str
+        self.normalize = normalize
         self.data_type = 'bytequeue'
         self.seed = None
         self.test_seed = None
@@ -78,6 +80,9 @@ class TraceGenerator:
     def get_extra_dataset_properties(self):
         extra_dataset_properties = {}
         return extra_dataset_properties
+
+    def get_dataset_string(self):
+        return f"{self.data_type}_{self.input_str}_{self.output_str}"
 
     def input_size(self):
         return len(self.input_str)
@@ -130,6 +135,18 @@ class TraceGenerator:
 
         inter_pkt_times_v = np.diff(
             np.insert(pkt_arrival_times_v, 0, 0))  # shouldnt this just give us back the inter_pkt_time_in?
+
+        if self.normalize:
+            inter_pkt_times_v = (inter_pkt_times_v - inter_pkt_time)/(inter_pkt_time*inter_pkt_time)
+            pkt_size_v -= (self.link_properties.max_pkt_size - self.link_properties.min_pkt_size)
+            if self.link_properties.max_pkt_size > self.link_properties.min_pkt_size:
+                pkt_size_v /= (self.link_properties.max_pkt_size - self.link_properties.min_pkt_size) # not actually the variance
+            capacity_v -= (self.link_properties.max_capacity - self.link_properties.min_capacity)
+            if self.link_properties.max_capacity > self.link_properties.min_capacity:
+                capacity_v /= (self.link_properties.max_capacity - self.link_properties.min_capacity) # not the actual variance
+            queue_bytes_v -= (self.link_properties.max_queue_bytes - self.link_properties.min_queue_bytes)
+            if self.link_properties.max_queue_bytes > self.link_properties.min_queue_bytes:
+                queue_bytes_v /= (self.link_properties.max_queue_bytes - self.link_properties.min_queue_bytes)
 
         return TraceSample(pkt_arrival_times_v, inter_pkt_times_v, pkt_size_v, backlog_v,
                             latency_v, capacity_v, queue_bytes_v, dropped_status,
@@ -195,7 +212,7 @@ class TraceGenerator:
         :param seq_length:
         :return:
         """
-        dataX= []  # Input sequences
+        dataX = []  # Input sequences
         dataY = []  # Target output values
         if data_set_name not in self.trace_data:
             self.trace_data[data_set_name] = []
@@ -209,6 +226,23 @@ class TraceGenerator:
 
         dataX_tensor_v = torch.tensor(np.array(dataX), dtype=torch.float32)
         dataY_tensor_v = torch.tensor(np.array(dataY), dtype=torch.float32)
+
+        if self.normalize:
+            # this relies on backlog being in position 0 of the output vector
+            (backlog_var, backlog_mean) = torch.var_mean(dataY_tensor_v[:,:,0])
+            backlog_var = torch.sqrt(backlog_var)
+            dataY_tensor_v[:,:,0] -= backlog_mean
+            dataY_tensor_v[:,:,0] /= backlog_var
+            for td in self.trace_data[data_set_name]:
+                td.backlog_v -= backlog_mean.numpy()
+                td.backlog_v /= backlog_var.numpy()
+            #_, _, input_len = dataX_tensor_v.shape
+            #for i in range(input_len):
+            #    (var,mean) = torch.var_mean(dataX_tensor_v[:,:,i])
+            #    dataX_tensor_v[:,:,i] -= mean
+            #    if var > 1e-4:
+            #        dataX_tensor_v[:,:,i] /= var
+
         print(f"Data shape: X - {dataX_tensor_v.shape}, Y - {dataY_tensor_v.shape}")
         return dataX_tensor_v, dataY_tensor_v
 
