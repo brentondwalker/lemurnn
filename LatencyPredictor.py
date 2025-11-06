@@ -186,6 +186,12 @@ class LatencyPredictor:
         ads_loss = {0: 0, 1: 0, 2: 0, 4: 0, 8: 0, 16: 0}
         ads_new_model = False
 
+        # if we normalized inputs and outpus for training, we still want to
+        # compute the val and test loss on their absolute values
+        output_scale = 1.0
+        if self.trace_generator.normalize:
+            output_scale = self.trace_generator.link_properties.max_pkt_size
+
         for epoch_i in range(n_epochs):
             self.epoch += 1
             new_best_model = False
@@ -251,7 +257,7 @@ class LatencyPredictor:
                     backlog_pred_val, dropped_pred_val, _ = self.model(X_val, hidden)
                     dropped_pred_val_binary = torch.argmax(dropped_pred_val, dim=2)
 
-                    val_backlog_loss = criterion_backlog(backlog_pred_val, backlog_target_val)
+                    val_backlog_loss = criterion_backlog(backlog_pred_val * output_scale, backlog_target_val * output_scale)
                     val_dropped_loss = criterion_dropped(dropped_pred_val.view(-1, 2), dropped_target_val.view(-1))
                     val_droprate_loss = torch.sum(
                         torch.abs(torch.sum(y_val[:, :, 1], dim=1) - torch.sum(dropped_pred_val_binary, dim=1)))
@@ -308,7 +314,7 @@ class LatencyPredictor:
 
                     backlog_pred_test, dropped_pred_test, _ = testmodel(X_test, hidden)
 
-                    backlog_loss_test = criterion_backlog(backlog_pred_test, backlog_target_test)
+                    backlog_loss_test = criterion_backlog(backlog_pred_test * output_scale, backlog_target_test * output_scale)
                     # index of capacity input is currently 2
                     backlog_loss_test_n = criterion_backlog(backlog_pred_test/X_test[:,:,2].unsqueeze(dim=-1), backlog_target_test/X_test[:,:,2].unsqueeze(dim=-1))
                     dropped_loss_test = criterion_dropped(dropped_pred_test.view(-1, 2), dropped_target_test.view(-1))
@@ -484,6 +490,10 @@ class LatencyPredictor:
 
         true_backlog, true_drops, predicted_backlog, predicted_drops = self.predict_sample(test_index=test_index, data_set_name=data_set_name, print_stats=print_stats)
         pkt_arrival_times_v = self.trace_generator.get_sample(test_index, data_set_name).pkt_arrival_times_v
+
+        if self.trace_generator.normalize:
+            true_backlog *= self.trace_generator.link_properties.max_pkt_size
+            predicted_backlog *= self.trace_generator.link_properties.max_pkt_size
 
         # turn off interactive mode so plots don't display until we call plt.show()
         plt.ioff()

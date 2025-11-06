@@ -21,17 +21,23 @@ def torch_energy_loss(tensor_a,tensor_b):
     # Compute the energy distance between two 1D distributions.
     return((2**0.5)*torch_cdf_loss(tensor_a,tensor_b,p=2))
 
-def symmetric_earthmover(tensor_a,tensor_b,p=1):
+def symmetric_earthmover(tensor_a, tensor_b, p=1, normalize=False):
     """
     Vectors are not normalized.
+    Normalize here means we divide both vectors by the sum of both their weights.
+    so normalize(V1) = V1 * 2/(sum(V1)+sum(V2))
     We compute the sum of the metric forward and backward, to cancel the direction bias.
     Also no pth roots, because they cause instability.
     """
     #print(tensor_a.shape, tensor_b.shape)
-    cdf_tensor_a = torch.cumsum(tensor_a,dim=-1)
-    cdf_tensor_b = torch.cumsum(tensor_b,dim=-1)
-    cdf_tensor_a_rev = torch.cumsum(torch.flip(tensor_a,[-1]),dim=-1)
-    cdf_tensor_b_rev = torch.cumsum(torch.flip(tensor_b,[-1]),dim=-1)
+    norm_term = 1.0
+    if normalize:
+        norm_term = 2.0/(torch.sum(tensor_a) + torch.sum(tensor_b))
+
+    cdf_tensor_a = torch.cumsum(norm_term * tensor_a, dim=-1)
+    cdf_tensor_b = torch.cumsum(norm_term * tensor_b, dim=-1)
+    cdf_tensor_a_rev = torch.cumsum(torch.flip(norm_term * tensor_a,[-1]),dim=-1)
+    cdf_tensor_b_rev = torch.cumsum(torch.flip(norm_term * tensor_b,[-1]),dim=-1)
     #print("-----------------------------------------------------")
     #print(tensor_a[0,:])
     #print(tensor_b[0,:])

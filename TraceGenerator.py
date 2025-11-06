@@ -137,16 +137,20 @@ class TraceGenerator:
             np.insert(pkt_arrival_times_v, 0, 0))  # shouldnt this just give us back the inter_pkt_time_in?
 
         if self.normalize:
-            inter_pkt_times_v = (inter_pkt_times_v - inter_pkt_time)/(inter_pkt_time*inter_pkt_time)
-            pkt_size_v -= (self.link_properties.max_pkt_size - self.link_properties.min_pkt_size)
-            if self.link_properties.max_pkt_size > self.link_properties.min_pkt_size:
-                pkt_size_v /= (self.link_properties.max_pkt_size - self.link_properties.min_pkt_size) # not actually the variance
-            capacity_v -= (self.link_properties.max_capacity - self.link_properties.min_capacity)
-            if self.link_properties.max_capacity > self.link_properties.min_capacity:
-                capacity_v /= (self.link_properties.max_capacity - self.link_properties.min_capacity) # not the actual variance
-            queue_bytes_v -= (self.link_properties.max_queue_bytes - self.link_properties.min_queue_bytes)
-            if self.link_properties.max_queue_bytes > self.link_properties.min_queue_bytes:
-                queue_bytes_v /= (self.link_properties.max_queue_bytes - self.link_properties.min_queue_bytes)
+            backlog_v /= self.link_properties.max_pkt_size
+            pkt_size_v /= self.link_properties.max_pkt_size
+            capacity_v /= self.link_properties.max_pkt_size
+            queue_bytes_v /= self.link_properties.max_pkt_size
+                              #inter_pkt_times_v = (inter_pkt_times_v - inter_pkt_time)/(inter_pkt_time*inter_pkt_time)
+            #pkt_size_v -= (self.link_properties.max_pkt_size - self.link_properties.min_pkt_size)
+            #if self.link_properties.max_pkt_size > self.link_properties.min_pkt_size:
+                #pkt_size_v /= (self.link_properties.max_pkt_size - self.link_properties.min_pkt_size) # not actually the variance
+            #capacity_v -= (self.link_properties.max_capacity - self.link_properties.min_capacity)
+            #if self.link_properties.max_capacity > self.link_properties.min_capacity:
+            #    capacity_v /= (self.link_properties.max_capacity - self.link_properties.min_capacity) # not the actual variance
+            #queue_bytes_v -= (self.link_properties.max_queue_bytes - self.link_properties.min_queue_bytes)
+            #if self.link_properties.max_queue_bytes > self.link_properties.min_queue_bytes:
+            #    queue_bytes_v /= (self.link_properties.max_queue_bytes - self.link_properties.min_queue_bytes)
 
         return TraceSample(pkt_arrival_times_v, inter_pkt_times_v, pkt_size_v, backlog_v,
                             latency_v, capacity_v, queue_bytes_v, dropped_status,
@@ -227,15 +231,18 @@ class TraceGenerator:
         dataX_tensor_v = torch.tensor(np.array(dataX), dtype=torch.float32)
         dataY_tensor_v = torch.tensor(np.array(dataY), dtype=torch.float32)
 
-        if self.normalize:
+        #if self.normalize:
             # this relies on backlog being in position 0 of the output vector
-            (backlog_var, backlog_mean) = torch.var_mean(dataY_tensor_v[:,:,0])
-            backlog_var = torch.sqrt(backlog_var)
-            dataY_tensor_v[:,:,0] -= backlog_mean
-            dataY_tensor_v[:,:,0] /= backlog_var
-            for td in self.trace_data[data_set_name]:
-                td.backlog_v -= backlog_mean.numpy()
-                td.backlog_v /= backlog_var.numpy()
+            #dataY_tensor_v[:, :, 0] /= self.link_properties.max_pkt_size
+            #for td in self.trace_data[data_set_name]:
+            #    td.backlog_v /= self.link_properties.max_pkt_size
+            #(backlog_var, backlog_mean) = torch.var_mean(dataY_tensor_v[:,:,0])
+            #backlog_var = torch.sqrt(backlog_var)
+            #dataY_tensor_v[:,:,0] -= backlog_mean
+            #dataY_tensor_v[:,:,0] /= backlog_var
+            #for td in self.trace_data[data_set_name]:
+            #    td.backlog_v -= backlog_mean.numpy()
+            #    td.backlog_v /= backlog_var.numpy()
             #_, _, input_len = dataX_tensor_v.shape
             #for i in range(input_len):
             #    (var,mean) = torch.var_mean(dataX_tensor_v[:,:,i])
