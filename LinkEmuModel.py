@@ -10,6 +10,7 @@ class LinkEmuModel(nn.Module):
 
     def __init__(self, input_size=4, hidden_size=2, num_layers=1, learning_rate=0.001, loadpath=None):
         super(LinkEmuModel, self).__init__()
+        #self.model_name = "none"
         self.input_size:int = input_size
         self.hidden_size:int = hidden_size
         self.num_layers:int = num_layers
@@ -20,6 +21,9 @@ class LinkEmuModel(nn.Module):
         self.optimizer: optim.Optimizer = None
         self.training_directory = None
         self.seed:int = None
+
+    def get_model_name(self):
+        return self.model_name
 
     def set_optimizer(self, optimizer:optim.Optimizer=None, learning_rate=None):
         if not optimizer:

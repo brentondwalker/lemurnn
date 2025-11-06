@@ -102,6 +102,7 @@ def main():
                                           hidden_size=hidden_size, num_layers=num_layers,
                                           learning_rate=learning_rate, dropout_rate=dropout_rate)
     elif use_lstm:
+        print("USING LSTM!!")
         model: LinkEmuModel = DropLSTM(input_size=trace_generator.input_size(),
                                            hidden_size=hidden_size, num_layers=num_layers,
                                            learning_rate=learning_rate, dropout_rate=dropout_rate)
@@ -111,6 +112,7 @@ def main():
                                           learning_rate=learning_rate, dropout_rate=dropout_rate,
                                           nonlinearity=nonlinearity)
     model.set_optimizer()
+    print(f"MODEL NAME IS: {model.get_model_name()}")
 
     if earthmover:
         latency_predictor = LatencyPredictorEarthmover(model, trace_generator=trace_generator, seed=torch_seed)

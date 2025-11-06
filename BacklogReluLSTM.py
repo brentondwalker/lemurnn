@@ -30,6 +30,7 @@ class BacklogReluLSTM(LinkEmuModel):
     def __init__(self, input_size=2, hidden_size=20, num_layers=1, learning_rate=0.001, loadpath=None):
         super(BacklogReluLSTM, self).__init__(input_size=input_size, hidden_size=hidden_size, num_layers=num_layers,
                                            learning_rate=learning_rate, loadpath=loadpath)
+        self.model_name = "backlogrelulstm"
         self.hidden_size = hidden_size
         self.cell = Backlog_ReLU_LSTMCell(input_size, hidden_size)
         self.fc = nn.Linear(hidden_size, 1)

@@ -5,6 +5,7 @@ from LinkEmuModel import LinkEmuModel
 
 class NonManualRNN(LinkEmuModel):
     def __init__(self, input_size=4, hidden_size=2, num_layers=1, learning_rate=0.001, loadpath=None, nonlinearity='relu', dropout_rate=0.0):
+        self.model_name = f"drop{nonlinearity}rnn"
         self.nonlinearity = nonlinearity
         self.dropout_rate = dropout_rate
         super(NonManualRNN, self).__init__(input_size=input_size, hidden_size=hidden_size, num_layers=num_layers, learning_rate=learning_rate, loadpath=loadpath)

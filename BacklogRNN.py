@@ -9,6 +9,7 @@ class BacklogRNN(LinkEmuModel):
     #input_size=4, hidden_size=2, num_layers=1, learning_rate=0.001, loadpath=None, nonlinearity='relu', dropout_rate=0.0
     def __init__(self, input_size=2, hidden_size=10, output_size=1, num_layers=1, learning_rate=0.001, loadpath=None, nonlinearity='relu', dropout_rate=0.0):
         super(BacklogRNN, self).__init__(input_size=input_size, hidden_size=hidden_size, num_layers=num_layers, learning_rate=learning_rate, loadpath=loadpath)
+        self.model_name = "backlogrnn"
         self.rnn = nn.RNN(input_size, hidden_size, batch_first=True, nonlinearity='relu')
         self.fc = nn.Linear(hidden_size, output_size)
 

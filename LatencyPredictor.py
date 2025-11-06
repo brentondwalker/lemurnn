@@ -87,8 +87,7 @@ class LatencyPredictor:
     A LatencyPredictor is given a packet arrival time and packet size,
     and predicts its latency and drop status.
     """
-
-    model_type = "rnn"
+    trainer_name = "trainer_bx"
 
     def __init__(self, model:LinkEmuModel, trace_generator:TraceGenerator,
                  device=None, seed=None, loadpath=None, track_grad=False):
@@ -147,7 +146,7 @@ class LatencyPredictor:
             else:
                 print(f"ERROR: training directory does not exist: {path}")
         elif not self.training_directory:
-                self.training_directory = f"{self.data_directory}/model-training/model-{self.model_type}-{self.trace_generator.get_dataset_string()}-l{self.model.num_layers}_h{self.model.hidden_size}-{int(time.time())}"
+                self.training_directory = f"{self.data_directory}/model-training/model-{self.trainer_name}-{self.model.get_model_name()}-{self.trace_generator.get_dataset_string()}-l{self.model.num_layers}_h{self.model.hidden_size}-{int(time.time())}"
         if create:
             if os.path.isdir(self.training_directory):
                 print(f"WARNING: training dir already exists: {self.training_directory}")

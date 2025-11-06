@@ -15,6 +15,8 @@ class LatencyPredictorEarthmover(LatencyPredictor):
     and predicts its latency and drop status.
     """
 
+    trainer_name = "trainer_bxe1"
+
     model_type = 'rnnearthmover'
 
     def __init__(self, model:LinkEmuModel, trace_generator: TraceGenerator, device=None, seed=None, loadpath=None, track_grad=False):
