@@ -12,6 +12,7 @@ from TraceGeneratorCodel import TraceGeneratorCodel
 from LatencyPredictor import *
 from LatencyPredictorEarthmover import LatencyPredictorEarthmover
 from LatencyPredictorEnergy import LatencyPredictorEnergy
+from TraceGeneratorPacketQueue import TraceGeneratorPacketQueue
 
 
 def main():
@@ -33,6 +34,7 @@ def main():
     parser.add_argument("-d", '--dropout_rate', type=float, default=0.0)
     parser.add_argument("-a", '--compute_ads_loss', action='store_true')
     parser.add_argument('--codel', action='store_true')
+    parser.add_argument('--packetqueue', action='store_true')
     parser.add_argument('--energy', action='store_true')
     parser.add_argument('--earthmover', action='store_true')
     parser.add_argument('--tanh', action='store_true')
@@ -59,6 +61,7 @@ def main():
     data_seed = args.data_seed
     torch_seed = args.torch_seed
     codel = args.codel
+    packetqueue = args.packetqueue
     energy = args.energy
     earthmover = args.earthmover
     use_relu_lstm = args.relu_lstm
@@ -76,8 +79,10 @@ def main():
         link_properties.infinite_queue()
 
     trace_generator = None
-    if codel:
-        trace_generator = TraceGeneratorCodel(link_properties, base_interval=10, codel_threshold=5)
+    if packetqueue:
+        trace_generator = TraceGeneratorPacketQueue(link_properties, normalize=normalize)
+    elif codel:
+        trace_generator = TraceGeneratorCodel(link_properties, normalize=normalize, base_interval=10, codel_threshold=5)
     else:
         trace_generator = TraceGenerator(link_properties, normalize=normalize)
 

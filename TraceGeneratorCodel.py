@@ -19,12 +19,13 @@ from TraceGenerator import TraceGenerator, LinkProperties, TraceSample
 
 class TraceGeneratorCodel(TraceGenerator):
 
-    def __init__(self, link_properties: LinkProperties, input_str='bscq', output_str='bd', base_interval=10, codel_threshold=5):
+    def __init__(self, link_properties: LinkProperties, input_str='bscq', output_str='bd', normalize=False, base_interval=10, codel_threshold=5):
         super().__init__(link_properties, input_str, output_str)
         self.base_interval = base_interval
         self.codel_threshold = codel_threshold
         self.interval_denominator = 1
         self.data_type = 'codel'
+        self.normalize = normalize
 
 
     def get_extra_dataset_properties(self):
@@ -97,6 +98,12 @@ class TraceGeneratorCodel(TraceGenerator):
             latency_v[i] = queue / capacity_s  # Store latency at this time step
 
         inter_pkt_times_v = np.diff(np.insert(pkt_arrival_times_v, 0, 0))
+
+        if self.normalize:
+            backlog_v /= self.link_properties.max_pkt_size
+            pkt_size_v /= self.link_properties.max_pkt_size
+            capacity_v /= self.link_properties.max_pkt_size
+            queue_bytes_v /= self.link_properties.max_pkt_size
 
         return TraceSample(pkt_arrival_times_v, inter_pkt_times_v, pkt_size_v, backlog_v,
                             latency_v, capacity_v, queue_bytes_v, dropped_status,

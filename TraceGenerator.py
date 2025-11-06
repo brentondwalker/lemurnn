@@ -29,7 +29,6 @@ class TraceSample:
 
 
 class TraceGenerator:
-    data_type = 'bytequeue'
 
     def __init__(self, link_properties:LinkProperties, input_str='bscq', output_str='bd', normalize=False):
         self.link_properties = link_properties
