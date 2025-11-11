@@ -21,9 +21,6 @@ Notes:
 import random
 import time
 from pathlib import Path
-
-import paramiko
-from networkx.algorithms.tree import maximum_spanning_tree
 from paramiko import Transport, SSHClient, AutoAddPolicy
 import socket
 import os
@@ -41,8 +38,8 @@ HOSTS = {
 
 NODE3_IP = "192.168.1.3"
 
-# number of loop iterations (you specified 1024)
-ITERATIONS = 1024
+# number of loop iterations
+ITERATIONS = 256
 
 # pause between iterations (seconds)
 PAUSE_SECONDS = 5
@@ -56,13 +53,6 @@ TRACE_DIR = "lemurnn-trace"
 # ========== END CONFIG ==========
 
 
-import os
-import paramiko
-from typing import Optional
-
-import os
-import paramiko
-from typing import Optional
 
 def connect_ssh(host_cfg: dict, port: int = 22) -> paramiko.SSHClient:
     """
@@ -292,15 +282,15 @@ def run_command_background_and_get_pid(ssh: paramiko.SSHClient, cmd: str) -> int
 def stop_pid(ssh: paramiko.SSHClient, pid: int) -> None:
     """Send SIGTERM to pid, then SIGKILL if it doesn't exit after a short wait."""
     try:
-        run_command(ssh, f"kill {pid} || true")
+        run_command(ssh, f"sudo kill {pid} || true")
     except Exception:
         pass
     # allow grace period
     time.sleep(1)
     # ensure dead
-    run_command(ssh, f"kill -0 {pid} >/dev/null 2>&1 || echo 'gone'")
+    run_command(ssh, f"sudo kill -0 {pid} >/dev/null 2>&1 || echo 'gone'")
     # if still exists, force kill
-    run_command(ssh, f"kill -9 {pid} >/dev/null 2>&1 || true")
+    run_command(ssh, f"sudo kill -9 {pid} >/dev/null 2>&1 || true")
 
 
 def main():
@@ -518,9 +508,13 @@ def main():
                     if moongen_pid:
                         print(f"Stopping moongen (PID {moongen_pid}) on node2...")
                         stop_pid(node2, moongen_pid)
+                        run_command(node2, "sudo killall MoonGen || true")
+                        run_command(node2, "sudo killall MoonGen || true")
                     else:
                         print("No moongen PID recorded; attempting to pkill moongen on node2.")
-                        run_command(node2, "pkill -f moongen || true")
+                        run_command(node2, "sudo pkill -f moongen || true")
+                        run_command(node2, "sudo killall MoonGen || true")
+                        run_command(node2, "sudo killall MoonGen || true")
                 except Exception as e:
                     print("Error stopping moongen:", e)
 
