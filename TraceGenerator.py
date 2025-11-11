@@ -45,6 +45,7 @@ class TraceGenerator:
         self.dataX_tensor_v, self.dataY_tensor_v = None, None
         self.dataX_val_tensor_v, self.dataY_val_tensor_v = None, None
         self.dataX_test_tensor_v, self.dataY_test_tensor_v = None, None
+        self.multiloader = False
         self.loaders = {
             'train': {},
             'val':   {},
@@ -69,6 +70,8 @@ class TraceGenerator:
             'input_size': self.input_size(),
             'output_size': self.output_size(),
             'seed': self.seed,
+            'normalize': self.normalize,
+            'multiloader': self.multiloader,
         }
         # add any attributes that are specific to subclasses
         dataset_properties = dict(list(dataset_properties.items()) + list(self.get_extra_dataset_properties().items()))
@@ -81,7 +84,12 @@ class TraceGenerator:
         return extra_dataset_properties
 
     def get_dataset_string(self):
-        return f"{self.data_type}_{self.input_str}_{self.output_str}"
+        ds_string = f"{self.data_type}_{self.input_str}_{self.output_str}"
+        if self.normalize:
+            ds_string += '_normalize'
+        if self.multiloader:
+            ds_string += '_multiloader'
+        return ds_string
 
     def input_size(self):
         return len(self.input_str)
@@ -261,6 +269,7 @@ class TraceGenerator:
         return self.loaders[data_set_name].values()
 
     def create_multiloaders(self, num_training_samples, seq_lengths_training, num_val_samples, seq_lengths_val, num_test_samples, seq_lengths_test, batch_size=64, seed=None):
+        self.multiloader = True
         self.seed = seed
         rng_backup = np.random.get_state()
         if self.seed:
