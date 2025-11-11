@@ -20,7 +20,10 @@ Notes:
 
 import random
 import time
+from pathlib import Path
+
 import paramiko
+from networkx.algorithms.tree import maximum_spanning_tree
 from paramiko import Transport, SSHClient, AutoAddPolicy
 import socket
 import os
@@ -36,6 +39,8 @@ HOSTS = {
     "dag01": {"host": "dag01", "username": "brenton", "password": None, "pkey": "/home/brenton/.ssh/id_rsa_legacy", "legacy": True},
 }
 
+NODE3_IP = "192.168.1.3"
+
 # number of loop iterations (you specified 1024)
 ITERATIONS = 1024
 
@@ -45,6 +50,7 @@ PAUSE_SECONDS = 5
 # remote working directory (home directories shared over NFS in your environment)
 EMULAB_HOME = "/users/brenton"
 DAG_HOME = "/home/brenton"
+TRACE_DIR = "lemurnn-trace"
 
 # Optional: path to paramiko private key file if you prefer that mode (if you placed it in pkey field above)
 # ========== END CONFIG ==========
@@ -299,10 +305,24 @@ def stop_pid(ssh: paramiko.SSHClient, pid: int) -> None:
 
 def main():
     # pick random CAP,LAT,QUE in [1,10]
+    min_pkt_size = 600
+    max_pkt_size = 1400
+    min_capacity = 1
+    max_capacity = 10
+    min_queue = 2 * max_pkt_size
+    max_queue = 10 * max_pkt_size
+    min_latency = 0
+    max_latency = 0
+    min_rate = 1
+    max_rate = 15
     CAP = random.randint(1, 10)
-    LAT = random.randint(1, 10)
-    QUE = random.randint(1, 10)
-    print(f"Experiment parameters: CAP={CAP}, LAT={LAT}, QUE={QUE}")
+    LAT = random.randint(0, 0)
+    QUE = random.randint(2, 10) * max_pkt_size  # mult by max packet size?
+    ETIME = int(time.time())
+    EMULAB_WORKDIR = f"{EMULAB_HOME}/{TRACE_DIR}/"
+    DAG_WORKDIR = f"{DAG_HOME}/{TRACE_DIR}/"
+
+    print(f"Experiment parameters: CAP={CAP}, LAT={LAT}, QUE={QUE}, ETIME={ETIME}")
 
     print(f"Using paramiko version {paramiko.__version__}")
 
@@ -326,59 +346,13 @@ def main():
         return
     print(f"CONNECTIONS STARTED!!")
 
-    # 1) Start moongen on node2 and keep running
-    node2 = conns["node2"]
-    moongen_log = f"{EMULAB_HOME}/moongen_{CAP}_{LAT}_{QUE}.log"
-    #moongen_cmd = f"cd MoonGen ; moongen -r {CAP} -l {LAT} -q {QUE}"
-    interfaces = "3 4"
-    moongen_cmd = f"cd MoonGen ; sudo ./build/MoonGen examples/l2-forward-bsring-lrl.lua -d {interfaces} -r {CAP} {CAP} -l 0 0 -q {QUE} {QUE}"
-    # run under nohup and capture pid
-    print(f"Starting moongen on node2: {moongen_cmd}")
-    try:
-        moongen_pid = run_command_background_and_get_pid(node2, f"{moongen_cmd} 2>&1 | tee {moongen_log}")
-        print(f"moongen started on node2 with PID {moongen_pid}")
-    except Exception as e:
-        print("Failed to start moongen:", e)
-        moongen_pid = None
+    # make main working directories
+    run_command(conns["node1"], f"mkdir -p {EMULAB_WORKDIR}", timeout=120)
+    run_command(conns["dag01"], f"mkdir -p {DAG_WORKDIR}", timeout=120)
 
-    time.sleep(10)
-
-    # 2) On node1 send 10 pings to node3
-    node1 = conns["node1"]
-    print("Running ping from node1 -> node3 (10 packets)...")
-    try:
-        exit_status, out, err = run_command(node1, "ping -c 10 node3")
-        if exit_status == 0:
-            print("Ping completed.")
-        else:
-            print("Ping returned non-zero status:", exit_status)
-            print("stdout:", out)
-            print("stderr:", err)
-    except Exception as e:
-        print("Ping failed:", e)
-
-    # 3) Start dagsnap on dag01 with sudo and keep running
-    dag = conns["dag01"]
-    dagsnap_out = f"{DAG_HOME}/mgtrace_{CAP}_{LAT}_{QUE}.erf"
-    # Using 'sudo -n' to avoid waiting for password; if sudo needs password, remove -n and handle accordingly
-    dagsnap_cmd = f"sudo -n dagsnap -d0 -o {dagsnap_out}"
-    print(f"Starting dagsnap on dag01: {dagsnap_cmd}")
-    try:
-        dagsnap_pid = run_command_background_and_get_pid(dag, f"{dagsnap_cmd} 2>&1")
-        print(f"dagsnap started on dag01 with PID {dagsnap_pid}")
-    except RuntimeError as e:
-        # Try without -n in case sudo prompt is needed (this will fail if interactive password required).
-        print("Could not start dagsnap with 'sudo -n'. Trying without -n (will fail if sudo needs password).")
-        try:
-            dagsnap_pid = run_command_background_and_get_pid(dag, f"sudo dagsnap -d0 -o {dagsnap_out} 2>&1")
-            print(f"dagsnap started on dag01 with PID {dagsnap_pid}")
-        except Exception as e2:
-            print("Failed to start dagsnap:", e2)
-            dagsnap_pid = None
-
-    # 4) Start ITGRecv on node3 in background
+    # 0) Start ITGRecv on node3 in background
     node3 = conns["node3"]
-    itgrecv_log = f"{EMULAB_HOME}/itgrecv_{CAP}_{LAT}_{QUE}.log"
+    itgrecv_log = f"{EMULAB_WORKDIR}/itgrecv_{ETIME}.log"
     itgrecv_cmd = f"ITGRecv"
     print(f"Starting ITGRecv on node3: {itgrecv_cmd}")
     try:
@@ -391,105 +365,164 @@ def main():
     # Wait a short moment for daemons to get ready
     time.sleep(2)
 
-    # 5) loop for 1024 iterations
-    for i in range(1, ITERATIONS + 1):
-        RATE = random.randint(1, 10)
-        print(f"[{i}/{ITERATIONS}] RATE={RATE}")
 
-        # Compose filenames
-        tx_log = f"{EMULAB_HOME}/ditg_i{i}_tx_{CAP}_{LAT}_{QUE}_{RATE}.dat"
-        rx_log = f"{EMULAB_HOME}/ditg_i{i}_rx_{CAP}_{LAT}_{QUE}_{RATE}.dat"
-        tx_csv = f"{EMULAB_HOME}/ditg_i{i}_tx_{CAP}_{LAT}_{QUE}_{RATE}.csv"
-        rx_csv = f"{EMULAB_HOME}/ditg_i{i}_rx_{CAP}_{LAT}_{QUE}_{RATE}.csv"
+    for CAP in range(min_capacity, max_capacity+1):
 
-        # Build ITGSend command.
-        # -z 1024 => send 1024 packets
-        # -T UDP => UDP
-        # -a node3 => destination
-        # -l <sendlog> => write sender-side binary log file
-        # -x <recvlog> => ask receiver to write its log file (receiver will write in its filesystem)
-        # For exponential inter-packet times, the manual uses -B E ... in examples; here we use a simple burst specification:
-        # We'll use "-B E <mean>" where <mean> is derived from RATE (you may need to tune/match manual's expected parameters).
-        # If you prefer to use constant packet rate, change to "-C <pps>" instead.
-        # NOTE: adapt this command to your local D-ITG installation if needed.
-        min_pkt_size = 600
-        max_pkt_size = 1400
-        # compute the desired mean pkt rate based on the other params
-        # (b/s) / ((B/pkt) * (b/B)) = (pkt/s)
-        pkt_rate = RATE *1000000 / (8*(max_pkt_size + min_pkt_size)/2)
-        itgsend_cmd = (
-            #f"ITGSend -a node3 -T UDP -z 1024 -E {pkt_rate} -u {min_pkt_size} {max_pkt_size} -l {tx_log} -x {rx_log}"
-            f"ITGSend -a pc33 -T UDP -z 1024 -E {pkt_rate} -u {min_pkt_size} {max_pkt_size} -l {tx_log} -x {rx_log}"
-        )
+        for QUE in range(min_queue, max_queue+1, max_pkt_size):
 
-        # Run ITGSend on node1 (it will contact ITGRecv on node3 via signaling)
-        # Important: launch in foreground so the script waits for it to finish sending the 1024 packets, then continue.
-        print(f"Running ITGSend on node1: {itgsend_cmd}")
-        try:
-            exit_status, out, err = run_command(node1, itgsend_cmd, timeout=120)
-            if exit_status != 0:
-                print(f"ITGSend returned non-zero status {exit_status}. stderr:\n{err}\nstdout:\n{out}")
-            else:
-                print("ITGSend finished.")
-        except Exception as e:
-            print("Error running ITGSend:", e)
-            # continue to next iteration; logs may still be present.
-        
-        # Pause 5 seconds as requested
-        print(f"Pausing {PAUSE_SECONDS} seconds...")
-        time.sleep(PAUSE_SECONDS)
+            for LAT in range(min_latency, max_latency+1):
+                # 1) Start moongen on node2 and keep running
+                node2 = conns["node2"]
+                moongen_log = f"{EMULAB_WORKDIR}/moongen_C{CAP}_L{LAT}_Q{QUE}_{ETIME}.log"
+                #moongen_cmd = f"cd MoonGen ; moongen -r {CAP} -l {LAT} -q {QUE}"
+                interfaces = "3 4"
+                moongen_cmd = f"cd MoonGen ; sudo ./build/MoonGen examples/l2-forward-bsring-lrl.lua -d {interfaces} -r {CAP} {CAP} -l 0 0 -q {QUE} {QUE}"
+                # run under nohup and capture pid
+                print(f"Starting moongen on node2: {moongen_cmd}")
+                try:
+                    moongen_pid = run_command_background_and_get_pid(node2, f"{moongen_cmd} 2>&1 | tee {moongen_log}")
+                    print(f"moongen started on node2 with PID {moongen_pid}")
+                except Exception as e:
+                    print("Failed to start moongen:", e)
+                    moongen_pid = None
 
-        # Convert the log files to CSV/text format using ITGDec on node1
-        # The home dir is shared, so node1 can read both send and receiver logs.
-        # ITGDec -l <txtlog> decodes binary log to text; we'll use that and name it .csv (it's space-separated
-        # but ITGDec's text output can be used as CSV-like). If you want strict CSV, post-process the text output.
-        print("Decoding tx log to text/CSV on node1...")
-        try:
-            dec_tx_cmd = f"ITGDec {tx_log} -l {tx_csv}"
-            exit_status, out, err = run_command(node1, dec_tx_cmd, timeout=60)
-            if exit_status != 0:
-                print(f"ITGDec (tx) returned {exit_status}. stderr:\n{err}\nstdout:\n{out}")
-            else:
-                print(f"Decoded sender log -> {tx_csv}")
-        except Exception as e:
-            print("Error decoding sender log:", e)
+                time.sleep(10)
 
-        print("Decoding rx log to text/CSV on node1 (rx log is on node3 but available via NFS)...")
-        try:
-            dec_rx_cmd = f"ITGDec {rx_log} -l {rx_csv}"
-            exit_status, out, err = run_command(node1, dec_rx_cmd, timeout=60)
-            if exit_status != 0:
-                print(f"ITGDec (rx) returned {exit_status}. stderr:\n{err}\nstdout:\n{out}")
-            else:
-                print(f"Decoded receiver log -> {rx_csv}")
-        except Exception as e:
-            print("Error decoding receiver log:", e)
+                # 2) On node1 send 10 pings to node3
+                node1 = conns["node1"]
+                print("Running ping from node1 -> node3 (10 packets)...")
+                try:
+                    exit_status, out, err = run_command(node1, f"ping -c 10 {NODE3_IP}")
+                    if exit_status == 0:
+                        print("Ping completed.")
+                    else:
+                        print("Ping returned non-zero status:", exit_status)
+                        print("stdout:", out)
+                        print("stderr:", err)
+                except Exception as e:
+                    print("Ping failed:", e)
 
-    # End loop
+                # 3) Start dagsnap on dag01 with sudo and keep running
+                dag = conns["dag01"]
+                dagsnap_out = f"{DAG_WORKDIR}/mgtrace_C{CAP}_L{LAT}_Q{QUE}_{ETIME}.erf"
+                # Using 'sudo -n' to avoid waiting for password; if sudo needs password, remove -n and handle accordingly
+                dagsnap_cmd = f"sudo -n dagsnap -d0 -o {dagsnap_out}"
+                print(f"Starting dagsnap on dag01: {dagsnap_cmd}")
+                try:
+                    dagsnap_pid = run_command_background_and_get_pid(dag, f"{dagsnap_cmd} 2>&1")
+                    print(f"dagsnap started on dag01 with PID {dagsnap_pid}")
+                except RuntimeError as e:
+                    # Try without -n in case sudo prompt is needed (this will fail if interactive password required).
+                    print("Could not start dagsnap with 'sudo -n'. Trying without -n (will fail if sudo needs password).")
+                    try:
+                        dagsnap_pid = run_command_background_and_get_pid(dag, f"sudo dagsnap -d0 -o {dagsnap_out} 2>&1")
+                        print(f"dagsnap started on dag01 with PID {dagsnap_pid}")
+                    except Exception as e2:
+                        print("Failed to start dagsnap:", e2)
+                        dagsnap_pid = None
 
-    print("Main loop complete. Stopping long-running processes...")
 
-    # stop dagsnap on dag01
-    try:
-        if dagsnap_pid:
-            print(f"Stopping dagsnap (PID {dagsnap_pid}) on dag01...")
-            stop_pid(dag, dagsnap_pid)
-        else:
-            print("No dagsnap PID recorded; attempting to pkill dagsnap on dag01.")
-            run_command(dag, "sudo pkill -f dagsnap || true")
-    except Exception as e:
-        print("Error stopping dagsnap:", e)
+                # 5) loop for 1024 iterations
+                WORK_SUBDIR = f"{EMULAB_WORKDIR}/C{CAP}_L{LAT}_Q{QUE}_{ETIME}"
+                run_command(node1, f"mkdir -p {WORK_SUBDIR}", timeout=120)
+                for i in range(1, ITERATIONS + 1):
+                    RATE = random.randint(min_rate, max_rate)
+                    print(f"[{i}/{ITERATIONS}] RATE={RATE}")
 
-    # stop moongen on node2
-    try:
-        if moongen_pid:
-            print(f"Stopping moongen (PID {moongen_pid}) on node2...")
-            stop_pid(node2, moongen_pid)
-        else:
-            print("No moongen PID recorded; attempting to pkill moongen on node2.")
-            run_command(node2, "pkill -f moongen || true")
-    except Exception as e:
-        print("Error stopping moongen:", e)
+                    # Compose filenames
+                    tx_log = f"{WORK_SUBDIR}/ditg_i{i}_tx_C{CAP}_L{LAT}_Q{QUE}_R{RATE}_{ETIME}.itg"
+                    rx_log = f"{WORK_SUBDIR}/ditg_i{i}_rx_C{CAP}_L{LAT}_Q{QUE}_R{RATE}_{ETIME}.itg"
+                    tx_csv = f"{WORK_SUBDIR}/ditg_i{i}_tx_C{CAP}_L{LAT}_Q{QUE}_R{RATE}_{ETIME}.csv"
+                    rx_csv = f"{WORK_SUBDIR}/ditg_i{i}_rx_C{CAP}_L{LAT}_Q{QUE}_R{RATE}_{ETIME}.csv"
+                    tx_mat = f"{WORK_SUBDIR}/ditg_i{i}_tx_C{CAP}_L{LAT}_Q{QUE}_R{RATE}_{ETIME}.dat"
+                    rx_mat = f"{WORK_SUBDIR}/ditg_i{i}_rx_C{CAP}_L{LAT}_Q{QUE}_R{RATE}_{ETIME}.dat"
+
+                    # Build ITGSend command.
+                    # -z 1024 => send 1024 packets
+                    # -T UDP => UDP
+                    # -a node3 => destination
+                    # -l <sendlog> => write sender-side binary log file
+                    # -x <recvlog> => ask receiver to write its log file (receiver will write in its filesystem)
+                    # For exponential inter-packet times, the manual uses -B E ... in examples; here we use a simple burst specification:
+                    # We'll use "-B E <mean>" where <mean> is derived from RATE (you may need to tune/match manual's expected parameters).
+                    # If you prefer to use constant packet rate, change to "-C <pps>" instead.
+                    # NOTE: adapt this command to your local D-ITG installation if needed.
+                    # compute the desired mean pkt rate based on the other params
+                    # (b/s) / ((B/pkt) * (b/B)) = (pkt/s)
+                    pkt_rate = RATE *1000000 / (8*(max_pkt_size + min_pkt_size)/2)
+                    itgsend_cmd = (
+                        f"ITGSend -a {NODE3_IP} -T UDP -z 1024 -E {pkt_rate} -u {min_pkt_size} {max_pkt_size} -l {tx_log} -x {rx_log}"
+                        #f"ITGSend -a pc33 -T UDP -z 1024 -E {pkt_rate} -u {min_pkt_size} {max_pkt_size} -l {tx_log} -x {rx_log}"
+                    )
+
+                    # Run ITGSend on node1 (it will contact ITGRecv on node3 via signaling)
+                    # Important: launch in foreground so the script waits for it to finish sending the 1024 packets, then continue.
+                    print(f"Running ITGSend on node1: {itgsend_cmd}")
+                    try:
+                        exit_status, out, err = run_command(node1, itgsend_cmd, timeout=120)
+                        if exit_status != 0:
+                            print(f"ITGSend returned non-zero status {exit_status}. stderr:\n{err}\nstdout:\n{out}")
+                        else:
+                            print("ITGSend finished.")
+                    except Exception as e:
+                        print("Error running ITGSend:", e)
+                        # continue to next iteration; logs may still be present.
+
+                    # Pause 5 seconds as requested
+                    print(f"Pausing {PAUSE_SECONDS} seconds...")
+                    time.sleep(PAUSE_SECONDS)
+
+                    # Convert the log files to CSV/text format using ITGDec on node1
+                    # The home dir is shared, so node1 can read both send and receiver logs.
+                    # ITGDec -l <txtlog> decodes binary log to text; we'll use that and name it .csv (it's space-separated
+                    # but ITGDec's text output can be used as CSV-like). If you want strict CSV, post-process the text output.
+                    print("Decoding tx log to text/CSV on node1...")
+                    try:
+                        dec_tx_cmd = f"ITGDec {tx_log} -l {tx_csv} -o {tx_mat}"
+                        exit_status, out, err = run_command(node1, dec_tx_cmd, timeout=60)
+                        if exit_status != 0:
+                            print(f"ITGDec (tx) returned {exit_status}. stderr:\n{err}\nstdout:\n{out}")
+                        else:
+                            print(f"Decoded sender log -> {tx_csv}")
+                    except Exception as e:
+                        print("Error decoding sender log:", e)
+
+                    print("Decoding rx log to text/CSV on node1 (rx log is on node3 but available via NFS)...")
+                    try:
+                        dec_rx_cmd = f"ITGDec {rx_log} -l {rx_csv} -o {rx_mat}"
+                        exit_status, out, err = run_command(node1, dec_rx_cmd, timeout=60)
+                        if exit_status != 0:
+                            print(f"ITGDec (rx) returned {exit_status}. stderr:\n{err}\nstdout:\n{out}")
+                        else:
+                            print(f"Decoded receiver log -> {rx_csv}")
+                    except Exception as e:
+                        print("Error decoding receiver log:", e)
+
+                    # End loop
+
+                print("Main loop complete. Stopping long-running processes...")
+
+                # stop dagsnap on dag01
+                try:
+                    if dagsnap_pid:
+                        print(f"Stopping dagsnap (PID {dagsnap_pid}) on dag01...")
+                        stop_pid(dag, dagsnap_pid)
+                    else:
+                        print("No dagsnap PID recorded; attempting to pkill dagsnap on dag01.")
+                        run_command(dag, "sudo pkill -f dagsnap || true")
+                except Exception as e:
+                    print("Error stopping dagsnap:", e)
+
+                # stop moongen on node2
+                try:
+                    if moongen_pid:
+                        print(f"Stopping moongen (PID {moongen_pid}) on node2...")
+                        stop_pid(node2, moongen_pid)
+                    else:
+                        print("No moongen PID recorded; attempting to pkill moongen on node2.")
+                        run_command(node2, "pkill -f moongen || true")
+                except Exception as e:
+                    print("Error stopping moongen:", e)
 
     # stop ITGRecv on node3
     try:
@@ -512,7 +545,7 @@ def main():
     print("Experiment finished. Logs are left in the shared home directories:")
     print(f" - moongen: {moongen_log if 'moongen_log' in locals() else '<unknown>'}")
     print(f" - dagsnap ERF: {dagsnap_out if 'dagsnap_out' in locals() else '<unknown>'}")
-    print(f" - ITG logs: ditg_tx_{CAP}_{LAT}_{QUE}_*.dat and ditg_rx_{CAP}_{LAT}_{QUE}_*.dat")
+    print(f" - ITG logs: ditg_tx_C{CAP}_L{LAT}_Q{QUE}_*.dat and ditg_rx_C{CAP}_L{LAT}_Q{QUE}_*.dat")
     print("You can now analyze the CSV/text files produced by ITGDec on node1.")
     
 
