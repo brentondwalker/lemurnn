@@ -19,12 +19,14 @@ class LatencyPredictorEarthmover(LatencyPredictor):
 
     model_type = 'rnnearthmover'
 
-    def __init__(self, model:LinkEmuModel, trace_generator: TraceGenerator, device=None, seed=None, loadpath=None, track_grad=False):
+    def __init__(self, model:LinkEmuModel, trace_generator: TraceGenerator,
+                 device=None, seed=None, loadpath=None, track_grad=False,
+                 mask_backlog_loss=False):
         """
         Use earthmover distance as a metric to compare drop predictions.
         """
         self.earthmover_p = 1
-        super().__init__(model, trace_generator, device=device, seed=seed, loadpath=loadpath, track_grad=track_grad)
+        super().__init__(model, trace_generator, device=device, seed=seed, loadpath=loadpath, track_grad=track_grad, mask_backlog_loss=mask_backlog_loss)
 
 
     def get_extra_model_properties(self):

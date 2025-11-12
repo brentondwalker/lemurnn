@@ -39,10 +39,13 @@ HOSTS = {
 NODE3_IP = "192.168.1.3"
 
 # number of loop iterations
-ITERATIONS = 256
+ITERATIONS = 8
 
 # pause between iterations (seconds)
 PAUSE_SECONDS = 5
+
+# number of packets to run in each sample
+PACKET_SEQUENCE_LENGTH = 1024
 
 # remote working directory (home directories shared over NFS in your environment)
 EMULAB_HOME = "/users/brenton"
@@ -340,27 +343,26 @@ def main():
     run_command(conns["node1"], f"mkdir -p {EMULAB_WORKDIR}", timeout=120)
     run_command(conns["dag01"], f"mkdir -p {DAG_WORKDIR}", timeout=120)
 
-    # 0) Start ITGRecv on node3 in background
-    node3 = conns["node3"]
-    itgrecv_log = f"{EMULAB_WORKDIR}/itgrecv_{ETIME}.log"
-    itgrecv_cmd = f"ITGRecv"
-    print(f"Starting ITGRecv on node3: {itgrecv_cmd}")
-    try:
-        itgrecv_pid = run_command_background_and_get_pid(node3, f"{itgrecv_cmd} 2>&1 | tee {itgrecv_log}")
-        print(f"ITGRecv started on node3 with PID {itgrecv_pid}")
-    except Exception as e:
-        print("Failed to start ITGRecv:", e)
-        itgrecv_pid = None
-
-    # Wait a short moment for daemons to get ready
-    time.sleep(2)
-
-
     for CAP in range(min_capacity, max_capacity+1):
 
         for QUE in range(min_queue, max_queue+1, max_pkt_size):
 
             for LAT in range(min_latency, max_latency+1):
+                # 0) Start ITGRecv on node3 in background
+                node3 = conns["node3"]
+                itgrecv_log = f"{EMULAB_WORKDIR}/itgrecv_{ETIME}.log"
+                itgrecv_cmd = f"ITGRecv"
+                print(f"Starting ITGRecv on node3: {itgrecv_cmd}")
+                try:
+                    itgrecv_pid = run_command_background_and_get_pid(node3, f"{itgrecv_cmd} 2>&1 | tee -a {itgrecv_log}")
+                    print(f"ITGRecv started on node3 with PID {itgrecv_pid}")
+                except Exception as e:
+                    print("Failed to start ITGRecv:", e)
+                    itgrecv_pid = None
+
+                # Wait a short moment for daemons to get ready
+                time.sleep(2)
+
                 # 1) Start moongen on node2 and keep running
                 node2 = conns["node2"]
                 moongen_log = f"{EMULAB_WORKDIR}/moongen_C{CAP}_L{LAT}_Q{QUE}_{ETIME}.log"
@@ -370,7 +372,7 @@ def main():
                 # run under nohup and capture pid
                 print(f"Starting moongen on node2: {moongen_cmd}")
                 try:
-                    moongen_pid = run_command_background_and_get_pid(node2, f"{moongen_cmd} 2>&1 | tee {moongen_log}")
+                    moongen_pid = run_command_background_and_get_pid(node2, f"{moongen_cmd} 2>&1 | tee -a {moongen_log}")
                     print(f"moongen started on node2 with PID {moongen_pid}")
                 except Exception as e:
                     print("Failed to start moongen:", e)
@@ -441,7 +443,7 @@ def main():
                     # (b/s) / ((B/pkt) * (b/B)) = (pkt/s)
                     pkt_rate = RATE *1000000 / (8*(max_pkt_size + min_pkt_size)/2)
                     itgsend_cmd = (
-                        f"ITGSend -a {NODE3_IP} -T UDP -z 1024 -E {pkt_rate} -u {min_pkt_size} {max_pkt_size} -l {tx_log} -x {rx_log}"
+                        f"ITGSend -a {NODE3_IP} -T UDP -z {PACKET_SEQUENCE_LENGTH} -E {pkt_rate} -u {min_pkt_size} {max_pkt_size} -l {tx_log} -x {rx_log}"
                         #f"ITGSend -a pc33 -T UDP -z 1024 -E {pkt_rate} -u {min_pkt_size} {max_pkt_size} -l {tx_log} -x {rx_log}"
                     )
 
@@ -497,9 +499,13 @@ def main():
                     if dagsnap_pid:
                         print(f"Stopping dagsnap (PID {dagsnap_pid}) on dag01...")
                         stop_pid(dag, dagsnap_pid)
+                        run_command(dag, "sudo killall dagsnap || true")
+                        run_command(dag, "sudo killall dagsnap || true")
                     else:
                         print("No dagsnap PID recorded; attempting to pkill dagsnap on dag01.")
                         run_command(dag, "sudo pkill -f dagsnap || true")
+                        run_command(dag, "sudo killall dagsnap || true")
+                        run_command(dag, "sudo killall dagsnap || true")
                 except Exception as e:
                     print("Error stopping dagsnap:", e)
 
@@ -510,24 +516,33 @@ def main():
                         stop_pid(node2, moongen_pid)
                         run_command(node2, "sudo killall MoonGen || true")
                         run_command(node2, "sudo killall MoonGen || true")
+                        time.sleep(5)
+                        run_command(node2, "sudo killall MoonGen || true")
+                        run_command(node2, "sudo killall MoonGen || true")
+                        time.sleep(5)
                     else:
                         print("No moongen PID recorded; attempting to pkill moongen on node2.")
                         run_command(node2, "sudo pkill -f moongen || true")
                         run_command(node2, "sudo killall MoonGen || true")
                         run_command(node2, "sudo killall MoonGen || true")
+                        time.sleep(5)
+                        run_command(node2, "sudo killall MoonGen || true")
+                        run_command(node2, "sudo killall MoonGen || true")
+                        time.sleep(5)
+
                 except Exception as e:
                     print("Error stopping moongen:", e)
 
-    # stop ITGRecv on node3
-    try:
-        if itgrecv_pid:
-            print(f"Stopping ITGRecv (PID {itgrecv_pid}) on node3...")
-            stop_pid(node3, itgrecv_pid)
-        else:
-            print("No ITGRecv PID recorded; attempting to pkill ITGRecv on node3.")
-            run_command(node3, "pkill -f ITGRecv || true")
-    except Exception as e:
-        print("Error stopping ITGRecv:", e)
+                # stop ITGRecv on node3
+                try:
+                    if itgrecv_pid:
+                        print(f"Stopping ITGRecv (PID {itgrecv_pid}) on node3...")
+                        stop_pid(node3, itgrecv_pid)
+                    else:
+                        print("No ITGRecv PID recorded; attempting to pkill ITGRecv on node3.")
+                        run_command(node3, "pkill -f ITGRecv || true")
+                except Exception as e:
+                    print("Error stopping ITGRecv:", e)
 
     # Close SSH sessions
     for name, sshc in conns.items():

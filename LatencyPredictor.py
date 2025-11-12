@@ -90,7 +90,8 @@ class LatencyPredictor:
     trainer_name = "trainer_bx"
 
     def __init__(self, model:LinkEmuModel, trace_generator:TraceGenerator,
-                 device=None, seed=None, loadpath=None, track_grad=False):
+                 device=None, seed=None, loadpath=None, track_grad=False,
+                 mask_backlog_loss=False):
         """
         XXX in the case of loadpath, we should load all the model info from the
         :param trace_generator:
@@ -111,6 +112,7 @@ class LatencyPredictor:
         self.input_size = trace_generator.input_size()
         self.output_size = trace_generator.output_size()
         self.model:LinkEmuModel = model.to(self.device)
+        self.mask_backlog_loss = mask_backlog_loss
         if loadpath:
             self.model.load_model_state(loadpath, self.device)
         self.best_model = deepcopy(self.model.state_dict())
