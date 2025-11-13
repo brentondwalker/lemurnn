@@ -21,6 +21,8 @@ Notes:
 import random
 import time
 from pathlib import Path
+
+import numpy as np
 from paramiko import Transport, SSHClient, AutoAddPolicy
 import socket
 import os
@@ -39,7 +41,7 @@ HOSTS = {
 NODE3_IP = "192.168.1.3"
 
 # number of loop iterations
-ITERATIONS = 8
+ITERATIONS = 32
 
 # pause between iterations (seconds)
 PAUSE_SECONDS = 5
@@ -302,20 +304,20 @@ def main():
     max_pkt_size = 1400
     min_capacity = 1
     max_capacity = 10
-    min_queue = 2 * max_pkt_size
-    max_queue = 10 * max_pkt_size
+    min_queue = 5 * max_pkt_size
+    max_queue = 50 * max_pkt_size
     min_latency = 0
     max_latency = 0
     min_rate = 1
-    max_rate = 15
-    CAP = random.randint(1, 10)
-    LAT = random.randint(0, 0)
-    QUE = random.randint(2, 10) * max_pkt_size  # mult by max packet size?
+    max_rate = 10
+    #CAP = random.randint(1, 10)
+    #LAT = random.randint(0, 0)
+    #QUE = random.randint(2, 10) * max_pkt_size  # mult by max packet size?
     ETIME = int(time.time())
     EMULAB_WORKDIR = f"{EMULAB_HOME}/{TRACE_DIR}/"
     DAG_WORKDIR = f"{DAG_HOME}/{TRACE_DIR}/"
 
-    print(f"Experiment parameters: CAP={CAP}, LAT={LAT}, QUE={QUE}, ETIME={ETIME}")
+    #print(f"Experiment parameters: CAP={CAP}, LAT={LAT}, QUE={QUE}, ETIME={ETIME}")
 
     print(f"Using paramiko version {paramiko.__version__}")
 
@@ -344,6 +346,8 @@ def main():
     run_command(conns["dag01"], f"mkdir -p {DAG_WORKDIR}", timeout=120)
 
     for CAP in range(min_capacity, max_capacity+1):
+        min_rate = int(CAP * 0.5)
+        max_rate = int(CAP * 1.5)
 
         for QUE in range(min_queue, max_queue+1, max_pkt_size):
 

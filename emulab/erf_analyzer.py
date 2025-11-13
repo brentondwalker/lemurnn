@@ -240,6 +240,7 @@ def save_as_tensor(experiment_traces, erf_filename, base_output_filename):  # <-
     - q = queue (Q)
     - l = baseline latency (L)
     - d = drop status (1 or 0)
+    - lt = latency (or 0)
     """
     print(f"\n--- Creating PyTorch Tensor File ---")
 
@@ -274,6 +275,7 @@ def save_as_tensor(experiment_traces, erf_filename, base_output_filename):  # <-
             # 4.1 Read data from PacketRecord
             tx_time = record.transmit_time
             size = float(record.size)
+            latency = float(record.latency)
             dropped_status = float(record.dropped_status)
 
             # 4.2 Calculate 't' (inter-packet time)
@@ -286,7 +288,10 @@ def save_as_tensor(experiment_traces, erf_filename, base_output_filename):  # <-
             # 4.3 Calculate 'b' (inter-packet time * capacity)
             b = t * c_val
 
-            # 4.4 Assemble feature vector: [t, b, s, c, q, l, d]
+            # pseudo-backlog, computed based on the latency and the assumption of constant capacity
+            bl = latency * c_val
+
+            # 4.4 Assemble feature vector: [t, b, s, c, q, l, lt, bl, d]
             features = [
                 t,
                 b,
@@ -294,6 +299,8 @@ def save_as_tensor(experiment_traces, erf_filename, base_output_filename):  # <-
                 c_val,
                 q_val,
                 l_val,
+                latency,
+                bl,
                 dropped_status
             ]
             experiment_feature_list.append(features)

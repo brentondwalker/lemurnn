@@ -37,6 +37,15 @@ link_properties_library = {
                               min_queue_bytes=2500,
                               max_queue_bytes=10000),
 
+    'blank': LinkProperties(min_arrival_rate=0.0,
+                              max_arrival_rate=0,
+                              min_capacity=0,
+                              max_capacity=0,
+                              min_pkt_size=0,
+                              max_pkt_size=0,
+                              min_queue_bytes=0,
+                              max_queue_bytes=0),
+
     # constant capacity, packet size, arrival rate
     'const-rates':      LinkProperties(min_arrival_rate=1,
                                    max_arrival_rate=1,
