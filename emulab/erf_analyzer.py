@@ -5,12 +5,22 @@ from collections import namedtuple
 import sys
 import hashlib
 import argparse
+import csv
+import os
+import re
 
 # Try to import pyshark
 try:
     import pyshark
 except ImportError:
     print("Error: 'pyshark' library not found. Please install it with 'pip install pyshark'", file=sys.stderr)
+    sys.exit(1)
+
+# Try to import torch  # <-- ADDED
+try:
+    import torch
+except ImportError:
+    print("Error: 'torch' library not found. Please install it with 'pip install torch'", file=sys.stderr)
     sys.exit(1)
 
 # Define the structure for the resulting analysis
@@ -143,6 +153,14 @@ def analyze_packet_trace(trace_data):
             }
 
         # Interfaces 3 (C->B) and 4 (B->A) are ignored for this specific A->B->C analysis.
+
+    # Process the final experiment's data after the loop finishes.
+    # The loop-based logic only processes a batch when the *next* one begins.
+    if tx_packets:
+        print("\nProcessing the final experiment batch...")
+        latency_results = compute_latencies(tx_packets, rx_packets)
+        print_results(latency_results)
+        experiment_traces.append(latency_results)
     return experiment_traces
 
 def print_results(records):
@@ -165,6 +183,141 @@ def print_results(records):
     print(f"Total packets analyzed: {len(records)}")
     dropped_count = sum(r.dropped_status for r in records)
     print(f"Total packets dropped (A->B): {dropped_count}")
+
+
+def parse_filename(filename):  # <-- ADDED
+    """
+    Parses the filename to extract experiment parameters.
+    Expected format: mgtrace_C<C>_L<L>_Q<Q>_...
+    Example: "mgtrace_C9_L0_Q9800_1762957671_7.erf"
+    Note: This parses the *source* ERF file.
+    """
+    # Regex to find C, L, and Q parameters
+    # It looks for C, L, and Q followed by digits
+    match = re.search(r'C(\d+)_L(\d+)_Q(\d+)', filename)
+
+    if match:
+        c_val = float(match.group(1))
+        l_val = float(match.group(2))
+        q_val = float(match.group(3))
+        return c_val, l_val, q_val
+    else:
+        print(f"Warning: Could not parse C,L,Q parameters from filename: {filename}", file=sys.stderr)
+        return None, None, None
+
+
+def save_results_to_csv(records, base_filename, experiment_number):
+    """Saves a list of PacketRecord results to a CSV file."""
+    if not records:
+        print(f"No records to save for experiment {experiment_number}.")
+        return
+
+    csv_filename = f"{base_filename}_{experiment_number}.csv"
+
+    try:
+        with open(csv_filename, 'w', newline='') as csvfile:
+            writer = csv.writer(csvfile, delimiter='\t')
+            # Write the header
+            writer.writerow(PacketRecord._fields)
+            # Write the data rows
+            writer.writerows(records)
+        print(f"Results for experiment {experiment_number} saved to {csv_filename}")
+    except IOError as e:
+        print(f"Error: Could not write to file {csv_filename}. Reason: {e}", file=sys.stderr)
+
+
+def save_as_tensor(experiment_traces, erf_filename, base_output_filename):  # <-- ADDED
+    """
+    Processes the list of experiment traces, filters/truncates them,
+    calculates features, and saves them as a single 3D PyTorch tensor.
+
+    Tensor Shape: (num_valid_experiments, 1024, 7)
+    Features: [t, b, s, c, q, l, d]
+    - t = inter-packet times
+    - b = inter-pkt time * capacity
+    - s = packet size
+    - c = capacity (C)
+    - q = queue (Q)
+    - l = baseline latency (L)
+    - d = drop status (1 or 0)
+    """
+    print(f"\n--- Creating PyTorch Tensor File ---")
+
+    # 1. Parse C, L, Q from the *source ERF filename*
+    c_val, l_val, q_val = parse_filename(erf_filename)
+    if c_val is None:
+        print("Error: Could not parse C,L,Q from filename. Aborting tensor creation.", file=sys.stderr)
+        return
+
+    print(f"Parsed parameters: C={c_val}, L={l_val}, Q={q_val}")
+
+    all_valid_experiments = []  # This will hold 2D lists
+
+    # 2. Loop through all experiments from this file
+    for i, experiment_records in enumerate(experiment_traces):
+        exp_num = i + 1
+
+        # 3. Apply filtering rules
+        if len(experiment_records) < 1024:
+            print(f"  Discarding experiment {exp_num}: too short ({len(experiment_records)} packets < 1024)")
+            continue
+
+        # Truncate if longer
+        records = experiment_records[:1024]
+        print(f"  Processing experiment {exp_num}: {len(records)} packets.")
+
+        # 4. Calculate features for this experiment
+        experiment_feature_list = []
+        last_tx_time = 0.0
+
+        for j, record in enumerate(records):
+            # 4.1 Read data from PacketRecord
+            tx_time = record.transmit_time
+            size = float(record.size)
+            dropped_status = float(record.dropped_status)
+
+            # 4.2 Calculate 't' (inter-packet time)
+            if j == 0:
+                t = 0.0  # No inter-packet time for the first packet
+            else:
+                t = tx_time - last_tx_time
+            last_tx_time = tx_time
+
+            # 4.3 Calculate 'b' (inter-packet time * capacity)
+            b = t * c_val
+
+            # 4.4 Assemble feature vector: [t, b, s, c, q, l, d]
+            features = [
+                t,
+                b,
+                size,
+                c_val,
+                q_val,
+                l_val,
+                dropped_status
+            ]
+            experiment_feature_list.append(features)
+
+        all_valid_experiments.append(experiment_feature_list)
+
+    # 5. Convert to a single 3D tensor and save
+    if not all_valid_experiments:
+        print("No valid experiments (>= 1024 packets) found. No tensor file created.")
+        return
+
+    try:
+        final_tensor = torch.tensor(all_valid_experiments, dtype=torch.float32)
+        output_pt_filename = f"{base_output_filename}.pt"
+
+        torch.save(final_tensor, output_pt_filename)
+
+        print(f"\n--- PyTorch Tensor Creation Complete ---")
+        print(f"Successfully saved {len(all_valid_experiments)} valid experiments.")
+        print(f"Tensor shape: {final_tensor.shape}")
+        print(f"Data saved to {output_pt_filename}")
+
+    except Exception as e:
+        print(f"--- Error: Could not save output tensor file to {output_pt_filename}. Reason: {e} ---", file=sys.stderr)
 
 
 def get_packet_identifier(pkt):
@@ -204,24 +357,14 @@ def load_trace_from_erf(filepath):
         for pkt in cap:
             packet_count += 1
             try:
-                #print(f"trying packet {packet_count}")
                 # ERF header contains the interface
                 if not hasattr(pkt, 'erf'):
                     # Skip packets that don't have an ERF header
-                    #print(f"  no header!!")
                     continue
-                #print("got a header!!")
-                #print(f"  erf: {type(pkt.erf)}\n  {pkt.erf}  ")
-                #print(f"  flags: {pkt.erf.flags}\t{type(pkt.erf.flags)}")
-                #print(f"  {pkt.erf._all_fields}")
-                #print(f"  \nCAP: {int(pkt.erf._all_fields['erf.flags.cap'])}")
-                #print(f"  contains erf keys: {pkt.erf}")
 
-                # pyshark provides the 'iface' field from the ERF header
-                # It might be a hex string (e.g., '0x1'), so use int(x, 0)
-                #print(f"iface: {pkt.erf._all_fields['erf.flags.cap']}")
+                # to get the interface we need to look at pkt.erf._all_fields['erf.flags.cap']
+                # for come reason we can't access erf.flags.cap directly
                 interface = int(pkt.erf._all_fields['erf.flags.cap'], 0)
-                #print(f"header found  interface {interface}")
 
                 # We only care about interfaces 0, 1, 2, 3
                 if interface not in [0, 1, 2, 3]:
@@ -283,34 +426,42 @@ if __name__ == '__main__':
         description="Analyze A->B->C packet latency and drops from an ERF trace file."
     )
     parser.add_argument(
-        "erf_file",
-        help="Path to the .erf packet capture file."
+        "erf_files",  # Changed from "erf_file"
+        nargs='+',      # Accept one or more file paths
+        help="Path(s) to the .erf packet capture file(s)."
     )
     args = parser.parse_args()
 
-    # 1. Load the trace data from the ERF file
-    trace_data = load_trace_from_erf(args.erf_file)
+    # Iterate over each file provided on the command line
+    total_files = len(args.erf_files)
+    for i, erf_file in enumerate(args.erf_files):
+        print(f"\n\n{'='*80}")
+        print(f"--- Processing File {i+1} of {total_files}: {erf_file} ---")
+        print(f"{'='*80}\n")
 
-    if not trace_data:
-        print("No processable packets found in the ERF file. Exiting.")
-        sys.exit(0)
+        # Get the base filename (e.g., "my_trace" from "my_trace.erf")
+        base_filename = os.path.splitext(erf_file)[0]
 
-    # 2. Run the analysis (this function is unchanged)
-    results = analyze_packet_trace(trace_data)
+        # 1. Load the trace data from the ERF file
+        trace_data = load_trace_from_erf(erf_file)
 
-    print(f"Extracted {len(results)} experiments.")
+        if not trace_data:
+            print("No processable packets found in the ERF file. Exiting.")
+            sys.exit(0)
 
-    #if not results:
-    #    print("Analysis complete, but no matching packets were found.")
-    #else:
-    #    # 3. Print the final results
-    #    print_results(results)
+        # 2. Run the analysis (this function is unchanged)
+        results = analyze_packet_trace(trace_data)
 
-    # Example of how you could save the data to a CSV file (recommended for analysis)
-    # import csv
-    # with open('analysis_report.csv', 'w', newline='') as csvfile:
-    #     writer = csv.writer(csvfile)
-    #     writer.writerow(PacketRecord._fields)
-    #     writer.writerows(results)
-    # print("\nResults also saved to analysis_report.csv")
+        experiment_number = 0
+        for trace in results:
+            save_results_to_csv(trace, base_filename, experiment_number)
+            experiment_number += 1
 
+        print(f"Extracted {len(results)} experiments.")
+
+        # 3. Save the results to a PyTorch tensor file  # <-- ADDED
+        save_as_tensor(results, erf_file, base_filename)
+
+    print(f"\n\n{'='*80}")
+    print(f"--- All {total_files} files processed. ---")
+    print(f"{'='*80}")
