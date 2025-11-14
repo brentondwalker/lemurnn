@@ -21,12 +21,12 @@ class LatencyPredictorEarthmover(LatencyPredictor):
 
     def __init__(self, model:LinkEmuModel, trace_generator: TraceGenerator,
                  device=None, seed=None, loadpath=None, track_grad=False,
-                 mask_backlog_loss=False):
+                 drop_masking=False):
         """
         Use earthmover distance as a metric to compare drop predictions.
         """
         self.earthmover_p = 1
-        super().__init__(model, trace_generator, device=device, seed=seed, loadpath=loadpath, track_grad=track_grad, mask_backlog_loss=mask_backlog_loss)
+        super().__init__(model, trace_generator, device=device, seed=seed, loadpath=loadpath, track_grad=track_grad, drop_masking=drop_masking)
 
 
     def get_extra_model_properties(self):
@@ -84,6 +84,15 @@ class LatencyPredictorEarthmover(LatencyPredictor):
                     backlog_target = y_batch[:, :, 0].unsqueeze(-1)  # Shape: [batch_size, seq_length, 1]
                     dropped_target = y_batch[:, :, 1].long()  # Shape: [batch_size, seq_length] (for CrossEntropyLoss)
                     dropped_pred_binary = torch.softmax(dropped_pred, dim=2)[:, :, 1]
+                    if self.drop_masking:
+                        # do this in a horribly klunky way for now
+                        # I want to make sure that the grad contribution is zero
+                        for i in range(0,batch_size):
+                            for j in range(0,seq_length):
+                                if dropped_target[i,j]:
+                                    backlog_target[i,j] = 0.0
+                                    backlog_pred[i,j] = 0.0
+
                     backlog_loss = criterion_backlog(backlog_pred, backlog_target)
                     dropped_loss = criterion_dropped(dropped_pred.view(-1, 2), dropped_target.view(-1))
                     droprate_loss = torch.sum(
@@ -138,7 +147,7 @@ class LatencyPredictorEarthmover(LatencyPredictor):
             with torch.no_grad():
                 loader = self.trace_generator.get_loader('val')
                 for X_val, y_val in loader:
-                    batch_size_val, _, _ = X_val.size()
+                    batch_size_val, seq_length, _ = X_val.size()
                     #hidden = torch.zeros(self.model.num_layers, batch_size_val, self.model.hidden_size).to(self.device)
                     hidden = self.model.new_hidden_tensor(batch_size_val, self.device)
 
@@ -147,6 +156,14 @@ class LatencyPredictorEarthmover(LatencyPredictor):
                     dropped_target_val = y_val[:, :, 1].long()
                     backlog_pred_val, dropped_pred_val, _ = self.model(X_val, hidden)
                     dropped_pred_val_binary = torch.argmax(dropped_pred_val, dim=2)
+                    if self.drop_masking:
+                        # do this in a horribly klunky way for now
+                        # I want to make sure that the grad contribution is zero
+                        for i in range(0,batch_size):
+                            for j in range(0,seq_length):
+                                if dropped_target_val[i,j]:
+                                    backlog_target_val[i,j] = 0.0
+                                    backlog_pred_val[i,j] = 0.0
 
                     val_backlog_loss = criterion_backlog(backlog_pred_val * output_scale, backlog_target_val * output_scale)
                     val_dropped_loss = criterion_dropped(dropped_pred_val.view(-1, 2), dropped_target_val.view(-1))
@@ -194,7 +211,7 @@ class LatencyPredictorEarthmover(LatencyPredictor):
             with torch.no_grad():
                 loader = self.trace_generator.get_loader('test')
                 for X_test, y_test in loader:
-                    batch_size_test, _, _ = X_test.size()
+                    batch_size_test, seq_length, _ = X_test.size()
                     #hidden = torch.zeros(self.model.num_layers, batch_size_test, self.model.hidden_size).to(self.device)
                     hidden = self.model.new_hidden_tensor(batch_size_test, self.device)
 
@@ -203,6 +220,14 @@ class LatencyPredictorEarthmover(LatencyPredictor):
                     dropped_target_test = y_test[:, :, 1].long()
 
                     backlog_pred_test, dropped_pred_test, _ = testmodel(X_test, hidden)
+                    if self.drop_masking:
+                        # do this in a horribly klunky way for now
+                        # I want to make sure that the grad contribution is zero
+                        for i in range(0,batch_size):
+                            for j in range(0,seq_length):
+                                if dropped_target_test[i,j]:
+                                    backlog_target_test[i,j] = 0.0
+                                    backlog_pred_test[i,j] = 0.0
 
                     backlog_loss_test = criterion_backlog(backlog_pred_test * output_scale, backlog_target_test * output_scale)
                     # index of capacity input is currently 2
