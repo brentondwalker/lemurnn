@@ -454,7 +454,7 @@ if __name__ == '__main__':
 
         if not trace_data:
             print("No processable packets found in the ERF file. Exiting.")
-            sys.exit(0)
+            continue
 
         # 2. Run the analysis (this function is unchanged)
         results = analyze_packet_trace(trace_data)
@@ -472,3 +472,4 @@ if __name__ == '__main__':
     print(f"\n\n{'='*80}")
     print(f"--- All {total_files} files processed. ---")
     print(f"{'='*80}")
+
