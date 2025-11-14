@@ -39,6 +39,8 @@ HOSTS = {
 }
 
 NODE3_IP = "192.168.1.3"
+NODE1_CNET_IP = "130.75.73.232"
+NODE3_CNET_IP = "130.75.73.172"
 
 # number of loop iterations
 ITERATIONS = 32
@@ -302,10 +304,11 @@ def main():
     # pick random CAP,LAT,QUE in [1,10]
     min_pkt_size = 600
     max_pkt_size = 1400
+    mean_pkt_size = (min_pkt_size + max_pkt_size)/2
     min_capacity = 1
     max_capacity = 10
-    min_queue = 5 * max_pkt_size
-    max_queue = 50 * max_pkt_size
+    min_queue = 5 * mean_pkt_size
+    max_queue = 50 * mean_pkt_size
     min_latency = 0
     max_latency = 0
     min_rate = 1
@@ -346,6 +349,8 @@ def main():
     run_command(conns["dag01"], f"mkdir -p {DAG_WORKDIR}", timeout=120)
 
     for CAP in range(min_capacity, max_capacity+1):
+        # use rate in the same units as CAPACITY: Mbps
+        # need to convert it later
         min_rate = int(CAP * 0.5)
         max_rate = int(CAP * 1.5)
 
@@ -422,16 +427,19 @@ def main():
                 WORK_SUBDIR = f"{EMULAB_WORKDIR}/C{CAP}_L{LAT}_Q{QUE}_{ETIME}"
                 run_command(node1, f"mkdir -p {WORK_SUBDIR}", timeout=120)
                 for i in range(1, ITERATIONS + 1):
-                    RATE = random.randint(min_rate, max_rate)
-                    print(f"[{i}/{ITERATIONS}] RATE={RATE}")
+                    # pick random rate and convert to pkt/s
+                    #RATE_Mbps = random.randint(min_rate, max_rate)
+                    RATE_Mbps = random.uniform(min_rate, max_rate)
+                    RATE_pps = int(RATE_Mbps * 1000000 / (mean_pkt_size * 8))
+                    print(f"[{i}/{ITERATIONS}] RATE_Mbps={RATE_Mbps:.4f}  RATE_pps={RATE_pps}")
 
                     # Compose filenames
-                    tx_log = f"{WORK_SUBDIR}/ditg_i{i}_tx_C{CAP}_L{LAT}_Q{QUE}_R{RATE}_{ETIME}.itg"
-                    rx_log = f"{WORK_SUBDIR}/ditg_i{i}_rx_C{CAP}_L{LAT}_Q{QUE}_R{RATE}_{ETIME}.itg"
-                    tx_csv = f"{WORK_SUBDIR}/ditg_i{i}_tx_C{CAP}_L{LAT}_Q{QUE}_R{RATE}_{ETIME}.csv"
-                    rx_csv = f"{WORK_SUBDIR}/ditg_i{i}_rx_C{CAP}_L{LAT}_Q{QUE}_R{RATE}_{ETIME}.csv"
-                    tx_mat = f"{WORK_SUBDIR}/ditg_i{i}_tx_C{CAP}_L{LAT}_Q{QUE}_R{RATE}_{ETIME}.dat"
-                    rx_mat = f"{WORK_SUBDIR}/ditg_i{i}_rx_C{CAP}_L{LAT}_Q{QUE}_R{RATE}_{ETIME}.dat"
+                    tx_log = f"{WORK_SUBDIR}/ditg_i{i}_tx_C{CAP}_L{LAT}_Q{QUE}_Rb{RATE_Mbps:.4f}_Rp{RATE_pps}_{ETIME}.itg"
+                    rx_log = f"{WORK_SUBDIR}/ditg_i{i}_rx_C{CAP}_L{LAT}_Q{QUE}_Rb{RATE_Mbps:.4f}_Rp{RATE_pps}_{ETIME}.itg"
+                    tx_csv = f"{WORK_SUBDIR}/ditg_i{i}_tx_C{CAP}_L{LAT}_Q{QUE}_Rb{RATE_Mbps:.4f}_Rp{RATE_pps}_{ETIME}.csv"
+                    rx_csv = f"{WORK_SUBDIR}/ditg_i{i}_rx_C{CAP}_L{LAT}_Q{QUE}_Rb{RATE_Mbps:.4f}_Rp{RATE_pps}_{ETIME}.csv"
+                    tx_mat = f"{WORK_SUBDIR}/ditg_i{i}_tx_C{CAP}_L{LAT}_Q{QUE}_Rb{RATE_Mbps:.4f}_Rp{RATE_pps}_{ETIME}.dat"
+                    rx_mat = f"{WORK_SUBDIR}/ditg_i{i}_rx_C{CAP}_L{LAT}_Q{QUE}_Rb{RATE_Mbps:.4f}_Rp{RATE_pps}_{ETIME}.dat"
 
                     # Build ITGSend command.
                     # -z 1024 => send 1024 packets
@@ -445,9 +453,9 @@ def main():
                     # NOTE: adapt this command to your local D-ITG installation if needed.
                     # compute the desired mean pkt rate based on the other params
                     # (b/s) / ((B/pkt) * (b/B)) = (pkt/s)
-                    pkt_rate = RATE *1000000 / (8*(max_pkt_size + min_pkt_size)/2)
+                    #pkt_rate = RATE *1000000 / (8*(max_pkt_size + min_pkt_size)/2)
                     itgsend_cmd = (
-                        f"ITGSend -a {NODE3_IP} -T UDP -z {PACKET_SEQUENCE_LENGTH} -E {pkt_rate} -u {min_pkt_size} {max_pkt_size} -l {tx_log} -x {rx_log}"
+                        f"ITGSend -a {NODE3_IP} -T UDP -z {PACKET_SEQUENCE_LENGTH} -E {RATE_pps} -u {min_pkt_size} {max_pkt_size} -l {tx_log} -x {rx_log} -Sda {NODE1_CNET_IP} -Ssa{NODE3_CNET_IP}"
                         #f"ITGSend -a pc33 -T UDP -z 1024 -E {pkt_rate} -u {min_pkt_size} {max_pkt_size} -l {tx_log} -x {rx_log}"
                     )
 
@@ -542,9 +550,21 @@ def main():
                     if itgrecv_pid:
                         print(f"Stopping ITGRecv (PID {itgrecv_pid}) on node3...")
                         stop_pid(node3, itgrecv_pid)
+                        run_command(node2, "sudo killall ITGRecv || true")
+                        run_command(node2, "sudo killall ITGRecv || true")
+                        time.sleep(5)
+                        run_command(node2, "sudo killall ITGRecv || true")
+                        run_command(node2, "sudo killall ITGRecv || true")
+                        time.sleep(5)
                     else:
                         print("No ITGRecv PID recorded; attempting to pkill ITGRecv on node3.")
                         run_command(node3, "pkill -f ITGRecv || true")
+                        run_command(node2, "sudo killall ITGRecv || true")
+                        run_command(node2, "sudo killall ITGRecv || true")
+                        time.sleep(5)
+                        run_command(node2, "sudo killall ITGRecv || true")
+                        run_command(node2, "sudo killall ITGRecv || true")
+                        time.sleep(5)
                 except Exception as e:
                     print("Error stopping ITGRecv:", e)
 

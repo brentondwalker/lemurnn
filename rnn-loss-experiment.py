@@ -42,6 +42,7 @@ def main():
     parser.add_argument('--lstm', action='store_true')
     parser.add_argument('--normalize', action='store_true')
     parser.add_argument('--multiloader', action='store_true')
+    parser.add_argument('--drop_masking', action='store_true')
 
     args = parser.parse_args()
 
@@ -68,6 +69,7 @@ def main():
     use_lstm = args.lstm
     normalize = args.normalize
     multiloader = args.multiloader
+    drop_masking = args.drop_masking
     nonlinearity = 'relu'
     if args.tanh:
         nonlinearity = 'tanh'
@@ -115,7 +117,7 @@ def main():
     print(f"MODEL NAME IS: {model.get_model_name()}")
 
     if earthmover:
-        latency_predictor = LatencyPredictorEarthmover(model, trace_generator=trace_generator, seed=torch_seed)
+        latency_predictor = LatencyPredictorEarthmover(model, trace_generator=trace_generator, seed=torch_seed, drop_masking=drop_masking)
     elif energy:
         latency_predictor = LatencyPredictorEnergy(model, trace_generator=trace_generator, seed=torch_seed)
     else:
