@@ -87,8 +87,8 @@ class LatencyPredictorEarthmover(LatencyPredictor):
                     if self.drop_masking:
                         # I want to make sure that the backlog grad contribution is zero for dropped packets
                         # new more efficient way
-                        backlog_target *= (1 - dropped_target.unsqueeze(dim=-1))
-                        backlog_pred *= (1 - dropped_target.unsqueeze(dim=-1))
+                        backlog_target = backlog_target * (1 - dropped_target.unsqueeze(dim=-1))
+                        backlog_pred = backlog_pred * (1 - dropped_target.unsqueeze(dim=-1))
 
                     backlog_loss = criterion_backlog(backlog_pred, backlog_target)
                     dropped_loss = criterion_dropped(dropped_pred.view(-1, 2), dropped_target.view(-1))
@@ -154,8 +154,8 @@ class LatencyPredictorEarthmover(LatencyPredictor):
                     backlog_pred_val, dropped_pred_val, _ = self.model(X_val, hidden)
                     dropped_pred_val_binary = torch.argmax(dropped_pred_val, dim=2)
                     if self.drop_masking:
-                        backlog_target_val *= (1 - dropped_target_val.unsqueeze(dim=-1))
-                        backlog_pred_val *= (1 - dropped_target_val.unsqueeze(dim=-1))
+                        backlog_target_val = backlog_target_val * (1 - dropped_target_val.unsqueeze(dim=-1))
+                        backlog_pred_val = backlog_pred_val * (1 - dropped_target_val.unsqueeze(dim=-1))
 
                     val_backlog_loss = criterion_backlog(backlog_pred_val * output_scale, backlog_target_val * output_scale)
                     val_dropped_loss = criterion_dropped(dropped_pred_val.view(-1, 2), dropped_target_val.view(-1))
@@ -213,8 +213,8 @@ class LatencyPredictorEarthmover(LatencyPredictor):
 
                     backlog_pred_test, dropped_pred_test, _ = testmodel(X_test, hidden)
                     if self.drop_masking:
-                        backlog_target_test *= (1 - dropped_target_test.unsqueeze(dim=-1))
-                        backlog_pred_test *= (1 - dropped_target_test.unsqueeze(dim=-1))
+                        backlog_target_test = backlog_target_test * (1 - dropped_target_test.unsqueeze(dim=-1))
+                        backlog_pred_test = backlog_pred_test * (1 - dropped_target_test.unsqueeze(dim=-1))
 
                     backlog_loss_test = criterion_backlog(backlog_pred_test * output_scale, backlog_target_test * output_scale)
                     # index of capacity input is currently 2
