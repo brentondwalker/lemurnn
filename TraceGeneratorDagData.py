@@ -70,6 +70,10 @@ class TraceGeneratorDagData(TraceGenerator):
 
 
     def generate_trace_sample(self, seq_length:int):
+        """
+        As a sort of normalization, we try to express everything in KByte and KByte/ms.
+        This should keep input and output values from getting to ridiculous.
+        """
         if self.sample_index >= len(self.sample_files):
             self.sample_sequence = np.random.permutation(len(self.sample_files))
             self.sample_index = 0
@@ -89,8 +93,11 @@ class TraceGeneratorDagData(TraceGenerator):
                 sys.exit(0)
 
         c_val, l_val, q_val = self.parse_filename(sample_filename)
+        # the CAP value is Mbit/s = KByte/ms.  No need to convert.
         capacity_s = np.float32(c_val)
-        queue_size_s = np.float32(q_val)
+
+        # queue size is in Bytes, so convert to KByte
+        queue_size_s = np.float32(q_val) / 1000
 
         inter_pkt_times_v = np.zeros(seq_length)
         pkt_size_v = np.zeros(seq_length)
@@ -115,9 +122,10 @@ class TraceGeneratorDagData(TraceGenerator):
                     queue_size_v[i] = queue_size_s
                     try:
                         # 1. Read data from CSV
-                        pkt_size_v[i] = np.float32(row['size'])
+                        # pkt_size is in Byte, so convert to KByte
+                        pkt_size_v[i] = np.float32(row['size']) / 1000
                         dropped_status[i] = np.float32(row['dropped_status'])
-                        dropped_sizes.append(int(row['size']))
+                        dropped_sizes.append(int(row['size'])) #XXX maybe convert this to Kbyte too?
                         dropped_indices.append(i)
 
                         # 2. Calculate 't' (inter-packet time)
@@ -125,13 +133,15 @@ class TraceGeneratorDagData(TraceGenerator):
                         if i == 0:
                             inter_pkt_times_v[i] = 0.0  # No inter-packet time for the first packet
                         else:
-                            inter_pkt_times_v[i] = tx_time - last_tx_time
+                            # times are in s, so convert to ms
+                            inter_pkt_times_v[i] = 1000 * (tx_time - last_tx_time)
                         last_tx_time = tx_time
 
                         if dropped_status[i]:
                             latency_v[i] = last_latency
                         else:
-                            latency_v[i] = np.float32(row['latency'])*1000  # use units of milliseconds
+                            # latency is in s, so convert to ms
+                            latency_v[i] = 1000 * np.float32(row['latency'])
                         last_latency = latency_v[i]
 
                         # 3. Calculate (pseudo) bits processed (inter-packet time * capacity)
@@ -154,5 +164,6 @@ class TraceGeneratorDagData(TraceGenerator):
         ts = TraceSample(pkt_arrival_times_v, inter_pkt_times_v, pkt_size_v, backlog_v,
                             latency_v, capacity_v, queue_size_v, dropped_status,
                             dropped_sizes, dropped_indices)
+        #print(ts)
         return ts
 

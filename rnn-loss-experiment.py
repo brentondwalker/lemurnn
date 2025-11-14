@@ -86,6 +86,9 @@ def main():
 
     trace_generator = None
     if dag_data:
+        # assign fixed value to packet size, because that will be used to re-sale the predictions
+        link_properties.max_pkt_size = 1000
+        link_properties.min_pkt_size = 1000
         trace_generator = TraceGeneratorDagData(link_properties, normalize=normalize, datadirs=dag_data)
     elif packetqueue:
         trace_generator = TraceGeneratorPacketQueue(link_properties, normalize=normalize)
