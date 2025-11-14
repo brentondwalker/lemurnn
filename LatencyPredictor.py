@@ -113,6 +113,8 @@ class LatencyPredictor:
         self.output_size = trace_generator.output_size()
         self.model:LinkEmuModel = model.to(self.device)
         self.drop_masking = drop_masking
+        if self.drop_masking:
+            self.trainer_name += "_dropmask"
         if loadpath:
             self.model.load_model_state(loadpath, self.device)
         self.best_model = deepcopy(self.model.state_dict())
