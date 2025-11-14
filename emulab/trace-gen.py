@@ -307,8 +307,8 @@ def main():
     mean_pkt_size = (min_pkt_size + max_pkt_size)/2
     min_capacity = 1
     max_capacity = 10
-    min_queue = 5 * mean_pkt_size
-    max_queue = 50 * mean_pkt_size
+    min_queue = 5 * int(mean_pkt_size)
+    max_queue = 50 * int(mean_pkt_size)
     min_latency = 0
     max_latency = 0
     min_rate = 1
@@ -455,7 +455,7 @@ def main():
                     # (b/s) / ((B/pkt) * (b/B)) = (pkt/s)
                     #pkt_rate = RATE *1000000 / (8*(max_pkt_size + min_pkt_size)/2)
                     itgsend_cmd = (
-                        f"ITGSend -a {NODE3_IP} -T UDP -z {PACKET_SEQUENCE_LENGTH} -E {RATE_pps} -u {min_pkt_size} {max_pkt_size} -l {tx_log} -x {rx_log} -Sda {NODE1_CNET_IP} -Ssa{NODE3_CNET_IP}"
+                        f"ITGSend -a {NODE3_IP} -T UDP -z {PACKET_SEQUENCE_LENGTH} -E {RATE_pps} -u {min_pkt_size} {max_pkt_size} -l {tx_log} -x {rx_log} -Sda {NODE3_CNET_IP}"
                         #f"ITGSend -a pc33 -T UDP -z 1024 -E {pkt_rate} -u {min_pkt_size} {max_pkt_size} -l {tx_log} -x {rx_log}"
                     )
 
