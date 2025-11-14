@@ -24,24 +24,27 @@ from TraceGenerator import TraceGenerator, LinkProperties, TraceSample
 
 class TraceGeneratorDagData(TraceGenerator):
 
-    def __init__(self, link_properties:LinkProperties=None, input_str='bscq', output_str='bd', normalize=False, datadir=None):
+    def __init__(self, link_properties:LinkProperties=None, input_str='bscq', output_str='bd', normalize=False, datadirs=None):
         super().__init__(link_properties, input_str, output_str)
         self.data_type = 'dag'
         self.normalize = normalize
-        self.datadir = datadir
+        self.datadirs = datadirs
 
         # make an index of all the sample files, and
-        self.sample_files = glob.glob('mgtrace_C*_L*_Q*_*_*.csv', root_dir=self.datadir, recursive=True)
+        self.sample_files = []
+        for dir_name in self.datadirs:
+            self.sample_files += (glob.glob(f"{dir_name}/mgtrace_C*_L*_Q*_*_*.csv", recursive=True))
         print(f"TraceGeneratorDagData: identified {len(self.sample_files)} samples")
         self.sample_sequence = np.random.permutation(len(self.sample_files))
         self.sample_index = 0
+
 
     def get_extra_dataset_properties(self):
         """
         This will be called by save_dataset_properties() in the superclass.
         """
         extra_dataset_properties = {
-            'datadir': self.datadir
+            'datadirs': self.datadirs
         }
         return extra_dataset_properties
 
@@ -78,7 +81,7 @@ class TraceGeneratorDagData(TraceGenerator):
         num_rows = 0
         while num_rows-1 < seq_length:
             sample_filename = self.sample_files[self.sample_sequence[self.sample_index]]
-            with open(f"{self.datadir}/{sample_filename}", 'r', newline='') as csvfile:
+            with open(f"{sample_filename}", 'r', newline='') as csvfile:
                 num_rows = sum(1 for row in csvfile)
             self.sample_index += 1
             if first_sample_index == self.sample_index:
@@ -99,7 +102,7 @@ class TraceGeneratorDagData(TraceGenerator):
         dropped_indices = []
 
         try:
-            with open(f"{self.datadir}/{sample_filename}", 'r', newline='') as csvfile:
+            with open(f"{sample_filename}", 'r', newline='') as csvfile:
                 # Use tab delimiter as specified
                 reader = csv.DictReader(csvfile, delimiter='\t')
                 last_tx_time = 0.0

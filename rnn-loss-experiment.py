@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import sys
 
 from DropLSTM import DropLSTM
 from DropReluLSTM import DropReluLSTM
@@ -12,6 +13,7 @@ from TraceGeneratorCodel import TraceGeneratorCodel
 from LatencyPredictor import *
 from LatencyPredictorEarthmover import LatencyPredictorEarthmover
 from LatencyPredictorEnergy import LatencyPredictorEnergy
+from TraceGeneratorDagData import TraceGeneratorDagData
 from TraceGeneratorPacketQueue import TraceGeneratorPacketQueue
 
 
@@ -33,6 +35,7 @@ def main():
     parser.add_argument("-r", '--learning_rate', type=float, default=0.001)
     parser.add_argument("-d", '--dropout_rate', type=float, default=0.0)
     parser.add_argument("-a", '--compute_ads_loss', action='store_true')
+    parser.add_argument('--dag_data', type=str, action='append', default=None)
     parser.add_argument('--codel', action='store_true')
     parser.add_argument('--packetqueue', action='store_true')
     parser.add_argument('--energy', action='store_true')
@@ -70,6 +73,7 @@ def main():
     normalize = args.normalize
     multiloader = args.multiloader
     drop_masking = args.drop_masking
+    dag_data = args.dag_data
     nonlinearity = 'relu'
     if args.tanh:
         nonlinearity = 'tanh'
@@ -81,7 +85,9 @@ def main():
         link_properties.infinite_queue()
 
     trace_generator = None
-    if packetqueue:
+    if dag_data:
+        trace_generator = TraceGeneratorDagData(link_properties, normalize=normalize, datadirs=dag_data)
+    elif packetqueue:
         trace_generator = TraceGeneratorPacketQueue(link_properties, normalize=normalize)
     elif codel:
         trace_generator = TraceGeneratorCodel(link_properties, normalize=normalize, base_interval=10, codel_threshold=5)
