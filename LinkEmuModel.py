@@ -95,7 +95,9 @@ class LinkEmuModel(nn.Module):
         filepath = f"{self.training_directory}/modelstate-{epoch}.json"
         torch.save(state, filepath)
         self.export_torchscript(f"{self.training_directory}/modelstate-torchscript-{epoch}.pt")
-        self.export_onnx(f"{self.training_directory}/modelstate-{epoch}.onnx")
+        # skip ONNX for now.
+        # too buggy and requires lots of special handling for LSTM
+        #self.export_onnx(f"{self.training_directory}/modelstate-{epoch}.onnx")
 
     def load_model_state(self, directory, device, epoch=-1):
         """
@@ -135,8 +137,6 @@ class LinkEmuModel(nn.Module):
         :param state_dict:
         :return:
         """
-        # Model parameters (using defaults from your __init__)
-        INPUT_SIZE = self.input_size
         BATCH_SIZE = 1
         SEQ_LEN = 1
 
@@ -146,9 +146,10 @@ class LinkEmuModel(nn.Module):
         else:
             model.load_state_dict(self.state_dict())
         model.eval()
-        x = torch.randn(BATCH_SIZE, SEQ_LEN, INPUT_SIZE)
+        dummy_x = torch.randn(BATCH_SIZE, SEQ_LEN, model.input_size)
+        dummy_hidden = model.new_hidden_tensor(batch_size=BATCH_SIZE)
 
-        traced_model = torch.jit.trace(model, x)
+        traced_model = torch.jit.trace(model, (dummy_x, dummy_hidden))
         traced_model.save(filename)
 
 
@@ -163,8 +164,6 @@ class LinkEmuModel(nn.Module):
         """
         # Model parameters (using defaults from your __init__)
         INPUT_SIZE = self.input_size
-        HIDDEN_SIZE = self.hidden_size
-        NUM_LAYERS = self.num_layers
 
         model = self.new_instance()
         if state_dict:
@@ -212,119 +211,4 @@ class LinkEmuModel(nn.Module):
 
         except Exception as e:
             print(f"\nExport failed: {e}")
-
-
-    def export_onnx_crap(self, filename, state_dict=None):
-
-        # 1. Instantiate your model
-        model = self.new_instance()
-        model.eval()  # CRITICAL: Disables dropout
-
-        # --- Create Dummy Inputs ---
-        batch_size = 1
-        seq_len = 1  # For single-step inference
-
-        # Input 1: The data (must be 3D)
-        dummy_input_data = torch.randn(batch_size, seq_len, model.input_size)
-
-        # Input 2: The *single* hidden state (for nn.RNN)
-        dummy_hidden_in = torch.zeros(model.num_layers, batch_size, model.hidden_size)
-
-        # ** THE FIX IS HERE **
-        # Pass a tuple of exactly two tensors
-        example_inputs = (dummy_input_data, dummy_hidden_in)
-
-        # --- Define Input/Output Names ---
-        # Must match: return backlog_out, dropped_out, hidden
-        input_names = ["input_data", "hidden_in"]
-        output_names = ["backlog_out", "dropped_out", "hidden_out"]
-
-        # --- Define Dynamic Axes ---
-        dynamic_axes = {
-            'input_data': {0: 'batch_size', 1: 'seq_len'},
-            'hidden_in': {1: 'batch_size'},
-            'backlog_out': {0: 'batch_size', 1: 'seq_len'},
-            'dropped_out': {0: 'batch_size', 1: 'seq_len'},
-            'hidden_out': {1: 'batch_size'}
-        }
-
-        print(f"Exporting model to {filename}...")
-        try:
-            torch.onnx.export(
-                model,
-                example_inputs,
-                filename,
-                input_names=input_names,
-                output_names=output_names,
-                dynamic_axes=dynamic_axes,
-                opset_version=12,
-                export_params=True
-            )
-            print("Export complete.")
-
-        except Exception as e:
-            print(f"Error during ONNX export: {e}")
-
-
-    def export_onnx_old(self, filename, state_dict=None):
-        """
-        Export the model to a format that other programs can load.
-
-        :param filename:
-        :param state_dict:
-        :return:
-        """
-        # 1. Instantiate your model and set to evaluation mode
-        model = self.new_instance()
-        # Load your trained weights here, e.g.:
-        if state_dict:
-            model.load_state_dict(state_dict)
-        else:
-            model.load_state_dict(self.state_dict())
-        model.eval()
-
-        # --- Create Dummy Inputs ---
-        batch_size = 1
-        seq_len = 1  # !! We export for single-step inference
-
-        # Input 1: The data (must be 3D)
-        dummy_input_data = torch.randn(batch_size, seq_len, model.input_size)
-
-        # Input 2: The hidden state
-        dummy_hidden_in = model.new_hidden_tensor(batch_size, device='cpu')
-
-        example_inputs = (dummy_input_data, dummy_hidden_in)
-
-        # --- Define Input/Output Names (THE FIX) ---
-        # Must match: return backlog_out, dropped_out, hidden
-        input_names = ["input_data", "hidden_in"]
-        output_names = ["backlog_out", "dropped_out", "hidden_out"]
-
-        # --- Define Dynamic Axes ---
-        # This allows your C++ code to use a different batch size
-        #dynamic_axes = {
-        #    'input_data': {0: 'batch_size'},
-        #    'hidden_in': {1: 'batch_size'},
-        #    'prediction': {0: 'batch_size'},
-        #    'hidden_out': {1: 'batch_size'}
-        #}
-
-        print(f"Exporting model to {filename}.onnx...")
-        try:
-            torch.onnx.export(
-                model,
-                example_inputs,
-                filename,
-                input_names=input_names,
-                output_names=output_names,
-                #dynamic_axes=dynamic_axes,
-                opset_version=18,  # version 12 is apparently too old   12,  # A common and stable version
-                export_params=True
-            )
-            print("Export complete.")
-            print("Model has 2 inputs: 'input_data', 'hidden_in'")
-            print("Model has 3 outputs: 'backlog_out', 'dropped_out', 'hidden_out'")
-
-        except Exception as e:
-            print(f"Error during ONNX export: {e}")
 
