@@ -114,9 +114,9 @@ def main():
                                           learning_rate=learning_rate, dropout_rate=dropout_rate)
     elif use_lstm:
         print("USING LSTM!!")
-        model: LinkEmuModel = DropLSTM(input_size=trace_generator.input_size(),
-                                           hidden_size=hidden_size, num_layers=num_layers,
-                                           learning_rate=learning_rate, dropout_rate=dropout_rate)
+        model:LinkEmuModel = DropLSTM(input_size=trace_generator.input_size(),
+                                      hidden_size=hidden_size, num_layers=num_layers,
+                                      learning_rate=learning_rate, dropout_rate=dropout_rate)
     else:
         model:LinkEmuModel = NonManualRNN(input_size=trace_generator.input_size(),
                                           hidden_size=hidden_size, num_layers=num_layers,

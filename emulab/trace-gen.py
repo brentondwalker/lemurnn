@@ -307,8 +307,11 @@ def main():
     mean_pkt_size = (min_pkt_size + max_pkt_size)/2
     min_capacity = 1
     max_capacity = 10
-    min_queue = 5 * int(mean_pkt_size)
-    max_queue = 50 * int(mean_pkt_size)
+    #min_queue = 5 * int(mean_pkt_size)
+    #max_queue = 50 * int(mean_pkt_size)
+    # in packet queue mode we just give the number of packets
+    min_queue = 5
+    max_queue = 50
     min_latency = 0
     max_latency = 0
     min_rate = 1
@@ -377,7 +380,8 @@ def main():
                 moongen_log = f"{EMULAB_WORKDIR}/moongen_C{CAP}_L{LAT}_Q{QUE}_{ETIME}.log"
                 #moongen_cmd = f"cd MoonGen ; moongen -r {CAP} -l {LAT} -q {QUE}"
                 interfaces = "3 4"
-                moongen_cmd = f"cd MoonGen ; sudo ./build/MoonGen examples/l2-forward-bsring-lrl.lua -d {interfaces} -r {CAP} {CAP} -l 0 0 -q {QUE} {QUE}"
+                #moongen_cmd = f"cd MoonGen ; sudo ./build/MoonGen examples/l2-forward-bsring-lrl.lua -d {interfaces} -r {CAP} {CAP} -l 0 0 -q {QUE} {QUE}"
+                moongen_cmd = f"cd MoonGen ; sudo ./build/MoonGen examples/l2-forward-psring-lrl.lua -d {interfaces} -r {CAP} {CAP} -l 0 0 -q {QUE} {QUE}"
                 # run under nohup and capture pid
                 print(f"Starting moongen on node2: {moongen_cmd}")
                 try:

@@ -5,6 +5,8 @@ import re
 import torch
 import torch.nn as nn
 from torch import optim
+from torch.export import Dim
+
 
 class LinkEmuModel(nn.Module):
 
@@ -39,7 +41,7 @@ class LinkEmuModel(nn.Module):
         return self.__class__(self.input_size, self.hidden_size, self.num_layers, self.learning_rate)
 
     def new_hidden_tensor(self, batch_size:int, device=None):
-        return None
+        return torch.zeros(self.num_layers, batch_size, self.hidden_size).to(device)
 
     def set_training_directory(self, training_directory):
         self.training_directory = training_directory
@@ -92,6 +94,8 @@ class LinkEmuModel(nn.Module):
             }
         filepath = f"{self.training_directory}/modelstate-{epoch}.json"
         torch.save(state, filepath)
+        self.export_torchscript(f"{self.training_directory}/modelstate-torchscript-{epoch}.pt")
+        self.export_onnx(f"{self.training_directory}/modelstate-{epoch}.onnx")
 
     def load_model_state(self, directory, device, epoch=-1):
         """
@@ -123,4 +127,204 @@ class LinkEmuModel(nn.Module):
         self.optimizer = optim.Adam(self.parameters())
         self.optimizer.load_state_dict(state['optimizer'])
         self.epoch = epoch
+
+
+    def export_torchscript(self, filename, state_dict=None):
+        """
+        :param filename:
+        :param state_dict:
+        :return:
+        """
+        # Model parameters (using defaults from your __init__)
+        INPUT_SIZE = self.input_size
+        BATCH_SIZE = 1
+        SEQ_LEN = 1
+
+        model = self.new_instance()
+        if state_dict:
+            model.load_state_dict(state_dict)
+        else:
+            model.load_state_dict(self.state_dict())
+        model.eval()
+        x = torch.randn(BATCH_SIZE, SEQ_LEN, INPUT_SIZE)
+
+        traced_model = torch.jit.trace(model, x)
+        traced_model.save(filename)
+
+
+    def export_onnx(self, filename, state_dict=None):
+        """
+        Actual useful info:
+        https://docs.pytorch.org/tutorials/intermediate/torch_export_tutorial.html
+
+        :param filename:
+        :param state_dict:
+        :return:
+        """
+        # Model parameters (using defaults from your __init__)
+        INPUT_SIZE = self.input_size
+        HIDDEN_SIZE = self.hidden_size
+        NUM_LAYERS = self.num_layers
+
+        model = self.new_instance()
+        if state_dict:
+            model.load_state_dict(state_dict)
+        else:
+            model.load_state_dict(self.state_dict())
+        model.eval()
+
+        BATCH_SIZE = 1
+        SEQ_LEN = 1
+
+        # Create dummy inputs that match the model's forward() signature: (x, hidden)
+        x = torch.randn(BATCH_SIZE, SEQ_LEN, INPUT_SIZE)
+        hidden = self.new_hidden_tensor(BATCH_SIZE)
+        dummy_inputs = (x, hidden)
+
+        # Define file path and I/O names
+        onnx_file_path = filename
+        input_names = ["x", "hidden"]
+        output_names = ["backlog_out", "dropped_out", "output_hidden"]
+
+        print(f"Exporting model to {onnx_file_path} (Opset Version 18)...")
+
+        # Using RNNs with single-step inference (SEQ_LEN=1) or NUM_LAYERS=1 with onnx causes all sorts
+        # of problems.  The only solution seems to be to make those dimensions dynamic.
+        # This is not a big deal, but I wish it were documented better, so I would not have spent a whole
+        # day fighting with it.
+        dynamic_shapes = {
+            "x": (Dim.AUTO, Dim.AUTO, Dim.STATIC),
+            "hidden": (Dim.AUTO, Dim.STATIC, Dim.STATIC),
+        }
+
+        try:
+            torch.onnx.export(
+                model,
+                dummy_inputs,
+                onnx_file_path,
+                opset_version=18,
+                input_names=input_names,
+                output_names=output_names,
+                dynamic_shapes=dynamic_shapes
+            )
+            print("\nExport successful!")
+            print("This model should now accept inputs with any sequence_length (e.g., 1).")
+
+        except Exception as e:
+            print(f"\nExport failed: {e}")
+
+
+    def export_onnx_crap(self, filename, state_dict=None):
+
+        # 1. Instantiate your model
+        model = self.new_instance()
+        model.eval()  # CRITICAL: Disables dropout
+
+        # --- Create Dummy Inputs ---
+        batch_size = 1
+        seq_len = 1  # For single-step inference
+
+        # Input 1: The data (must be 3D)
+        dummy_input_data = torch.randn(batch_size, seq_len, model.input_size)
+
+        # Input 2: The *single* hidden state (for nn.RNN)
+        dummy_hidden_in = torch.zeros(model.num_layers, batch_size, model.hidden_size)
+
+        # ** THE FIX IS HERE **
+        # Pass a tuple of exactly two tensors
+        example_inputs = (dummy_input_data, dummy_hidden_in)
+
+        # --- Define Input/Output Names ---
+        # Must match: return backlog_out, dropped_out, hidden
+        input_names = ["input_data", "hidden_in"]
+        output_names = ["backlog_out", "dropped_out", "hidden_out"]
+
+        # --- Define Dynamic Axes ---
+        dynamic_axes = {
+            'input_data': {0: 'batch_size', 1: 'seq_len'},
+            'hidden_in': {1: 'batch_size'},
+            'backlog_out': {0: 'batch_size', 1: 'seq_len'},
+            'dropped_out': {0: 'batch_size', 1: 'seq_len'},
+            'hidden_out': {1: 'batch_size'}
+        }
+
+        print(f"Exporting model to {filename}...")
+        try:
+            torch.onnx.export(
+                model,
+                example_inputs,
+                filename,
+                input_names=input_names,
+                output_names=output_names,
+                dynamic_axes=dynamic_axes,
+                opset_version=12,
+                export_params=True
+            )
+            print("Export complete.")
+
+        except Exception as e:
+            print(f"Error during ONNX export: {e}")
+
+
+    def export_onnx_old(self, filename, state_dict=None):
+        """
+        Export the model to a format that other programs can load.
+
+        :param filename:
+        :param state_dict:
+        :return:
+        """
+        # 1. Instantiate your model and set to evaluation mode
+        model = self.new_instance()
+        # Load your trained weights here, e.g.:
+        if state_dict:
+            model.load_state_dict(state_dict)
+        else:
+            model.load_state_dict(self.state_dict())
+        model.eval()
+
+        # --- Create Dummy Inputs ---
+        batch_size = 1
+        seq_len = 1  # !! We export for single-step inference
+
+        # Input 1: The data (must be 3D)
+        dummy_input_data = torch.randn(batch_size, seq_len, model.input_size)
+
+        # Input 2: The hidden state
+        dummy_hidden_in = model.new_hidden_tensor(batch_size, device='cpu')
+
+        example_inputs = (dummy_input_data, dummy_hidden_in)
+
+        # --- Define Input/Output Names (THE FIX) ---
+        # Must match: return backlog_out, dropped_out, hidden
+        input_names = ["input_data", "hidden_in"]
+        output_names = ["backlog_out", "dropped_out", "hidden_out"]
+
+        # --- Define Dynamic Axes ---
+        # This allows your C++ code to use a different batch size
+        #dynamic_axes = {
+        #    'input_data': {0: 'batch_size'},
+        #    'hidden_in': {1: 'batch_size'},
+        #    'prediction': {0: 'batch_size'},
+        #    'hidden_out': {1: 'batch_size'}
+        #}
+
+        print(f"Exporting model to {filename}.onnx...")
+        try:
+            torch.onnx.export(
+                model,
+                example_inputs,
+                filename,
+                input_names=input_names,
+                output_names=output_names,
+                #dynamic_axes=dynamic_axes,
+                opset_version=18,  # version 12 is apparently too old   12,  # A common and stable version
+                export_params=True
+            )
+            print("Export complete.")
+            print("Model has 2 inputs: 'input_data', 'hidden_in'")
+            print("Model has 3 outputs: 'backlog_out', 'dropped_out', 'hidden_out'")
+
+        except Exception as e:
+            print(f"Error during ONNX export: {e}")
 

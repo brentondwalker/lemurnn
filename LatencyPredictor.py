@@ -204,7 +204,7 @@ class LatencyPredictor:
             num_train_samples = 0
             for loader in self.trace_generator.get_loader_iterator('train'):
                 for X_batch, y_batch in loader:
-                    #print(X_batch.shape, y_batch.shape)
+                    print("Xbatch Ybatch shapes: ", X_batch.shape, y_batch.shape)
                     batch_size, seq_length, _ = X_batch.size()
                     #hidden = torch.zeros(self.model.num_layers, batch_size, self.model.hidden_size).to(self.device)  # Move hidden to same device
                     hidden = self.model.new_hidden_tensor(batch_size, self.device)
