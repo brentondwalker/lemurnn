@@ -258,7 +258,13 @@ class TraceGenerator:
             #        dataX_tensor_v[:,:,i] /= var
 
         print(f"Data shape: X - {dataX_tensor_v.shape}, Y - {dataY_tensor_v.shape}")
+        self.print_means(dataX_tensor_v, dataY_tensor_v)
         return dataX_tensor_v, dataY_tensor_v
+
+    def print_means(self, dataX_tensor_v, dataY_tensor_v):
+        print (f"X means: {torch.mean(dataX_tensor_v, dim=(0,1,))}")
+        print (f"Y means: {torch.mean(dataY_tensor_v, dim=(0,1,))}")
+        return 0
 
     def get_loader(self, data_set_name='train', seq_length=None):
         if seq_length not in self.loaders[data_set_name]:
