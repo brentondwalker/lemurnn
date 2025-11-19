@@ -32,15 +32,15 @@ from typing import Optional, Tuple
 
 # ========== CONFIG ==========
 HOSTS = {
-    "node1": {"host": "pc93", "username": "brenton", "password": None, "pkey": "/home/brenton/.ssh/id_rsa", "legacy": False},
-    "node2": {"host": "pc3", "username": "brenton", "password": None, "pkey": "/home/brenton/.ssh/id_rsa", "legacy": False},
-    "node3": {"host": "pc33", "username": "brenton", "password": None, "pkey": "/home/brenton/.ssh/id_rsa", "legacy": False},
+    "node1": {"host": "pc33", "username": "brenton", "password": None, "pkey": "/home/brenton/.ssh/id_rsa", "legacy": False},
+    "node2": {"host": "pc93", "username": "brenton", "password": None, "pkey": "/home/brenton/.ssh/id_rsa", "legacy": False},
+    "node3": {"host": "pc3", "username": "brenton", "password": None, "pkey": "/home/brenton/.ssh/id_rsa", "legacy": False},
     "dag01": {"host": "dag01", "username": "brenton", "password": None, "pkey": "/home/brenton/.ssh/id_rsa_legacy", "legacy": True},
 }
 
 NODE3_IP = "192.168.1.3"
-NODE1_CNET_IP = "130.75.73.232"
-NODE3_CNET_IP = "130.75.73.172"
+NODE1_CNET_IP = "130.75.73.172"
+NODE3_CNET_IP = "130.75.73.142"
 
 # number of loop iterations
 ITERATIONS = 32
@@ -302,20 +302,19 @@ def stop_pid(ssh: paramiko.SSHClient, pid: int) -> None:
 
 def main():
     # pick random CAP,LAT,QUE in [1,10]
-    min_pkt_size = 600
+    min_pkt_size = 0
     max_pkt_size = 1400
     mean_pkt_size = (min_pkt_size + max_pkt_size)/2
     min_capacity = 1
     max_capacity = 10
-    #min_queue = 5 * int(mean_pkt_size)
-    #max_queue = 50 * int(mean_pkt_size)
-    # in packet queue mode we just give the number of packets
-    min_queue = 5
-    max_queue = 50
+    capacity_increment = 1
+    min_queue = 5 * int(mean_pkt_size)
+    max_queue = 100 * int(mean_pkt_size)
+    queue_increment = 10 * int(mean_pkt_size)
     min_latency = 0
     max_latency = 0
-    min_rate = 1
-    max_rate = 10
+    min_rate = 0.01
+    max_rate = 0.5
     #CAP = random.randint(1, 10)
     #LAT = random.randint(0, 0)
     #QUE = random.randint(2, 10) * max_pkt_size  # mult by max packet size?
@@ -351,13 +350,13 @@ def main():
     run_command(conns["node1"], f"mkdir -p {EMULAB_WORKDIR}", timeout=120)
     run_command(conns["dag01"], f"mkdir -p {DAG_WORKDIR}", timeout=120)
 
-    for CAP in range(min_capacity, max_capacity+1):
+    for CAP in range(min_capacity, max_capacity+1, capacity_increment):
         # use rate in the same units as CAPACITY: Mbps
         # need to convert it later
         min_rate = int(CAP * 0.5)
         max_rate = int(CAP * 1.5)
 
-        for QUE in range(min_queue, max_queue+1, max_pkt_size):
+        for QUE in range(min_queue, max_queue+1, queue_increment):
 
             for LAT in range(min_latency, max_latency+1):
                 # 0) Start ITGRecv on node3 in background
@@ -380,8 +379,8 @@ def main():
                 moongen_log = f"{EMULAB_WORKDIR}/moongen_C{CAP}_L{LAT}_Q{QUE}_{ETIME}.log"
                 #moongen_cmd = f"cd MoonGen ; moongen -r {CAP} -l {LAT} -q {QUE}"
                 interfaces = "3 4"
-                #moongen_cmd = f"cd MoonGen ; sudo ./build/MoonGen examples/l2-forward-bsring-lrl.lua -d {interfaces} -r {CAP} {CAP} -l 0 0 -q {QUE} {QUE}"
-                moongen_cmd = f"cd MoonGen ; sudo ./build/MoonGen examples/l2-forward-psring-lrl.lua -d {interfaces} -r {CAP} {CAP} -l 0 0 -q {QUE} {QUE}"
+                moongen_cmd = f"cd MoonGen ; sudo ./build/MoonGen examples/l2-forward-bsring-lrl.lua -d {interfaces} -r {CAP} {CAP} -l 0 0 -q {QUE} {QUE}"
+                #moongen_cmd = f"cd MoonGen ; sudo ./build/MoonGen examples/l2-forward-psring-lrl.lua -d {interfaces} -r {CAP} {CAP} -l 0 0 -q {QUE} {QUE}"
                 # run under nohup and capture pid
                 print(f"Starting moongen on node2: {moongen_cmd}")
                 try:
