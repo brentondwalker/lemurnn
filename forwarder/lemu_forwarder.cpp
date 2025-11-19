@@ -4,11 +4,14 @@
  * This C++ program implements a high-speed, low-latency packet forwarder
  * between two DPDK-managed ports (A and B).
  *
- * It uses four lcores:
- * 1. RX (Port A) -> rte_ring (A->B) [Timestamps packet]
- * 2. rte_ring (A->B) -> TX (Port B)
- * 3. RX (Port B) -> rte_ring (B->A) [Timestamps packet]
- * 4. rte_ring (B->A) -> TX (Port A)
+ * Architecture:
+ * Direction A->B: [RX Port A] -> Ring1 -> [Latency Worker] -> Ring2 -> [TX Port B]
+ * Direction B->A: [RX Port B] -> Ring3 -> [Latency Worker] -> Ring4 -> [TX Port A]
+ *
+ * Requirements:
+ * - 7 CPU Cores Total (1 Main + 6 Workers)
+ * - 2 Dynamic Mbuf Fields (Timestamp, Latency)
+ * - 4 rte_rings
  *
  */
 
@@ -32,9 +35,9 @@
 #include "lemurnn.h"
 
 #define BURST_SIZE 32
-#define NUM_MBUFS 8191
+#define NUM_MBUFS 8191 * 2 // Increased pool size for buffering in 4 rings
 #define MBUF_CACHE_SIZE 250
-#define RING_SIZE 16384 // Must be a power of 2
+#define RING_SIZE 16384
 
 // RX/TX descriptor defaults
 #define RX_DESC_DEFAULT 1024
@@ -158,19 +161,20 @@ static void port_init(uint16_t port_id, struct rte_mempool *pool) {
 
 struct rx_lcore_params {
     uint16_t port_id;
-    struct rte_ring *ring;
+    struct rte_ring *ring_out;
+};
+
+struct prediction_lcore_params {
+    struct rte_ring *ring_in;
+    struct rte_ring *ring_out;
 };
 
 struct tx_lcore_params {
     uint16_t port_id;
-    struct rte_ring *ring;
+    struct rte_ring *ring_in;
 };
 
 // --- LCore Thread Functions ---
-
-static inline double compute_latency(uint64_t inter_packet_time_ms, uint16_t packet_size) {
-  return 0.0;
-}
 
 /**
  * RX thread
@@ -182,20 +186,60 @@ static inline double compute_latency(uint64_t inter_packet_time_ms, uint16_t pac
 static int rx_thread_main(void *arg) {
     struct rx_lcore_params *params = (struct rx_lcore_params *)arg;
     uint16_t port_id = params->port_id;
-    struct rte_ring *ring = params->ring;
+    struct rte_ring *ring = params->ring_out;
     struct rte_mbuf *bufs[BURST_SIZE];
     uint16_t nb_rx, nb_enq, i;
 
     uint32_t lcore_id = rte_lcore_id();
     std::cout << "Starting RX thread on lcore " << lcore_id << " for port " << port_id << std::endl;
 
+    while (!force_quit) {
+        nb_rx = rte_eth_rx_burst(port_id, 0, bufs, BURST_SIZE);
+        if (nb_rx == 0) {
+            continue;
+        }
+
+        // arrival timestamp from TSC clock
+        // https://doc.dpdk.org/api-1.6/rte__cycles_8h.html
+        uint64_t now = rte_rdtsc();
+
+        // record arrival timestamps
+        for (i = 0; i < nb_rx; i++) {
+            *TIMESTAMP_FIELD(bufs[i]) = now;
+        }
+        
+        nb_enq = rte_ring_sp_enqueue_burst(ring, (void * const *)bufs, nb_rx, NULL);
+        if (unlikely(nb_enq < nb_rx)) {
+            rte_pktmbuf_free_bulk(&bufs[nb_enq], nb_rx - nb_enq);
+        }
+    }
+
+    std::cout << "Exiting RX thread on lcore " << lcore_id << std::endl;
+    return 0;
+}
+
+
+/**
+ * PREDICTION thread
+ * - pulls incoming packets from RX rte_ring
+ * - get arrival timestamp and compute inter-packet time
+ * - use lemurnn model to predict latency and drop status
+ * - discard or record expect TX time and push to latency queue
+ */
+static int prediction_thread_main(void *arg) {
+    struct prediction_lcore_params *params = (struct prediction_lcore_params *)arg;
+    struct rte_ring *ring_in = params->ring_in;
+    struct rte_ring *ring_out = params->ring_out;
+    struct rte_mbuf *bufs[BURST_SIZE];
+    uint16_t nb_dq, nb_enq, i;
+
+    uint32_t lcore_id = rte_lcore_id();
+    std::cout << "Starting PREDICTION thread on lcore " << lcore_id << std::endl;
+
     // initialize a LEmuRnn model for this thread
     // XXX this should be a cmd-line arg, and the hidden size and num layers should be too
     //     Or they should be saved along with the model.
-    //const std::string MODEL_PATH = "/users/brenton/lemu-forwarder/modelstate-torchscript-96-l3-s32-in4-out3.pt";
     const std::string MODEL_PATH = "/users/brenton/lemu-forwarder/modelstate-torchscript-1684-droprelurnn-l4_h64-bscq_bd.pt";
-    //const int HIDDEN_SIZE = 32;
-    //const int NUM_LAYERS = 3;
     const int HIDDEN_SIZE = 64;
     const int NUM_LAYERS = 4;
     const double CAPACITY = 5;
@@ -203,23 +247,17 @@ static int rx_thread_main(void *arg) {
     LEmuRnn model(MODEL_PATH, NUM_LAYERS, HIDDEN_SIZE, CAPACITY, QUEUE_SIZE);
     
     // need to keep track of the arrival time of the last packet
-    uint64_t last_packet_time = 0;
+    uint64_t last_packet_time_tsc = 0;
 
     while (!force_quit) {
-        nb_rx = rte_eth_rx_burst(port_id, 0, bufs, BURST_SIZE);
-        if (nb_rx == 0) {
-            continue; // Busy-wait
-        }
+        nb_dq = rte_ring_sc_dequeue_burst(ring_in, (void **)bufs, BURST_SIZE, NULL);
+        if (nb_dq == 0) continue;
 
-        // arrival timestamp from TSC clock
-        // https://doc.dpdk.org/api-1.6/rte__cycles_8h.html
-        uint64_t now = rte_rdtsc();
-
-        // 3. Attach timestamp to each packet
-        for (i = 0; i < nb_rx; i++) {
+        for (i = 0; i < nb_dq; i++) {
+            uint64_t arrival_tsc = *TIMESTAMP_FIELD(bufs[i]);
             uint16_t size_byte = rte_pktmbuf_pkt_len(bufs[i]);
             double size_kbyte = ((double)size_byte)/1000.0;
-            uint64_t inter_packet_time_tsc = now - last_packet_time;
+            uint64_t inter_packet_time_tsc = arrival_tsc - last_packet_time_tsc;
             double inter_packet_time_ms = 1000.0*((double)inter_packet_time_tsc)/tsc_rate;
 
             // When the program first starts, or if the link has been idle for awhile, 
@@ -230,32 +268,31 @@ static int rx_thread_main(void *arg) {
                 inter_packet_time_ms = 0.0;
                 //XXX should we also reset the model hidden state?
             }
-            std::cout << "packet arrival[" << port_id << "]: " << inter_packet_time_ms
-                 << "\t" << size_kbyte << std::endl;
+            //std::cout << "packet prediction: " << inter_packet_time_ms
+            //     << "\t" << size_kbyte << std::endl;
+            //LEmuRnn::PacketAction pa = {1.5, true};
             LEmuRnn::PacketAction pa = model.predict(inter_packet_time_ms, size_kbyte);
             if (pa.drop) {
                 rte_pktmbuf_free(bufs[i]);
                 std::cout << "\tdrop!!" << std::endl;
             } else {
-                //LEmuRnn::PacketAction pa = {1.5, true};
-                std::cout << "\tPacket Action[" << port_id << "]: " << pa.latency_ms
+                std::cout << "\tPacket Action: " << pa.latency_ms
                           << "\t" << pa.drop << std::endl;
-                uint64_t send_time_tsc = now + (uint64_t)(pa.latency_ms * tsc_rate / 1000.0);
-                //uint64_t send_time_tsc = now + (uint64_t)(pa.latency_ms * 1.0);
-                std::cout << now << "\t" << inter_packet_time_tsc  << "\t" << inter_packet_time_ms
+                uint64_t send_time_tsc = arrival_tsc + (uint64_t)(pa.latency_ms * tsc_rate / 1000.0);
+                //uint64_t send_time_tsc = arrival_tsc + (uint64_t)(pa.latency_ms * 1.0);
+                std::cout << arrival_tsc << "\t" << inter_packet_time_tsc  << "\t" << inter_packet_time_ms
                           << "\t" << pa.latency_ms << "\t" << send_time_tsc << std::endl;
-                *TIMESTAMP_FIELD(bufs[i]) = now;
                 *SEND_TIME_FIELD(bufs[i]) = send_time_tsc;
-                nb_enq = rte_ring_sp_enqueue(ring, (void *)bufs[i]);
+                nb_enq = rte_ring_sp_enqueue(ring_out, (void *)bufs[i]);
                 if (unlikely(nb_enq != 1)) {
                     rte_pktmbuf_free(bufs[i]);
                 }
             }
-            last_packet_time = now;
+            last_packet_time_tsc = arrival_tsc;
         }
     }
 
-    std::cout << "Exiting RX thread on lcore " << lcore_id << std::endl;
+    std::cout << "Exiting PREDICTION thread on lcore " << lcore_id << std::endl;
     return 0;
 }
 
@@ -269,7 +306,7 @@ static int rx_thread_main(void *arg) {
 static int tx_thread_main(void *arg) {
     struct tx_lcore_params *params = (struct tx_lcore_params *)arg;
     uint16_t port_id = params->port_id;
-    struct rte_ring *ring = params->ring;
+    struct rte_ring *ring = params->ring_in;
     struct rte_mbuf *bufs[BURST_SIZE];
     uint16_t nb_dq, nb_tx, i;
     uint64_t timestamp, send_time_tsc;
@@ -322,7 +359,8 @@ int main(int argc, char *argv[]) {
     uint16_t nb_ports;
     uint32_t lcore_id;
     struct rte_mempool *mbuf_pool;
-    struct rte_ring *ring_a_to_b, *ring_b_to_a;
+    struct rte_ring *ring_rx_to_prediction_ab, *ring_prediction_to_tx_ab;
+    struct rte_ring *ring_rx_to_prediction_ba, *ring_prediction_to_tx_ba;
 
     ret = rte_eal_init(argc, argv);
     if (ret < 0) {
@@ -388,13 +426,18 @@ int main(int argc, char *argv[]) {
         rte_exit(EXIT_FAILURE, "Port initialization failed: %s\n", e.what());
     }
 
-    // create the two rte_rings
-    ring_a_to_b = rte_ring_create("RING_A_TO_B", RING_SIZE, rte_socket_id(),
-                                  RING_F_SP_ENQ | RING_F_SC_DEQ); // Single-Producer, Single-Consumer
-    ring_b_to_a = rte_ring_create("RING_B_TO_A", RING_SIZE, rte_socket_id(),
+    // create the four rte_rings
+    ring_rx_to_prediction_ab = rte_ring_create("RING_RX2P_A2B", RING_SIZE, rte_socket_id(),
+                                  RING_F_SP_ENQ | RING_F_SC_DEQ);
+    ring_prediction_to_tx_ab = rte_ring_create("RING_P2TX_A2B", RING_SIZE, rte_socket_id(),
+                                  RING_F_SP_ENQ | RING_F_SC_DEQ);
+    ring_rx_to_prediction_ba = rte_ring_create("RING_RX2P_B2A", RING_SIZE, rte_socket_id(),
+                                  RING_F_SP_ENQ | RING_F_SC_DEQ);
+    ring_prediction_to_tx_ba = rte_ring_create("RING_P2TX_B2A", RING_SIZE, rte_socket_id(),
                                   RING_F_SP_ENQ | RING_F_SC_DEQ);
     
-    if (ring_a_to_b == NULL || ring_b_to_a == NULL) {
+    if (ring_rx_to_prediction_ab == NULL || ring_prediction_to_tx_ab == NULL
+        || ring_rx_to_prediction_ba == NULL || ring_prediction_to_tx_ba == NULL) {
         rte_exit(EXIT_FAILURE, "Cannot create rings: %s\n", rte_strerror(rte_errno));
     }
 
@@ -407,16 +450,19 @@ int main(int argc, char *argv[]) {
         rte_exit(EXIT_FAILURE, "Could not find 4 worker lcores. Found %zu.\n", worker_lcores.size());
     }
 
-    static struct rx_lcore_params rx_params_a, rx_params_b;
-    static struct tx_lcore_params tx_params_a, tx_params_b;
+    static struct rx_lcore_params rx_params_ab, rx_params_ba;
+    static struct prediction_lcore_params prediction_params_ab, prediction_params_ba;
+    static struct tx_lcore_params tx_params_ab, tx_params_ba;
 
     // flow: A -> B
-    rx_params_a = {port_a, ring_a_to_b};
-    tx_params_b = {port_b, ring_a_to_b};
+    rx_params_ab = {port_a, ring_rx_to_prediction_ab};
+    prediction_params_ab = {ring_rx_to_prediction_ab, ring_prediction_to_tx_ab};
+    tx_params_ab = {port_b, ring_prediction_to_tx_ab};
 
     // flow: B -> A
-    rx_params_b = {port_b, ring_b_to_a};
-    tx_params_a = {port_a, ring_b_to_a};
+    rx_params_ba = {port_b, ring_rx_to_prediction_ba};
+    prediction_params_ba = {ring_rx_to_prediction_ba, ring_prediction_to_tx_ba};
+    tx_params_ba = {port_a, ring_prediction_to_tx_ba};
 
     std::cout << "Main lcore " << rte_lcore_id() << " launching threads..." << std::endl;
     std::cout << "  lcore " << worker_lcores[0] << ": RX Port A (" << port_a << ") -> Ring A->B" << std::endl;
@@ -430,10 +476,12 @@ int main(int argc, char *argv[]) {
     std::cout << "TSC rate: " << tsc_rate_uint64 << "\t" << tsc_rate << std::endl;
 
     // launch threads
-    rte_eal_remote_launch(rx_thread_main, &rx_params_a, worker_lcores[0]);
-    rte_eal_remote_launch(tx_thread_main, &tx_params_b, worker_lcores[1]);
-    rte_eal_remote_launch(rx_thread_main, &rx_params_b, worker_lcores[2]);
-    rte_eal_remote_launch(tx_thread_main, &tx_params_a, worker_lcores[3]);
+    rte_eal_remote_launch(rx_thread_main, &rx_params_ab, worker_lcores[0]);
+    rte_eal_remote_launch(prediction_thread_main, &prediction_params_ab, worker_lcores[1]);   
+    rte_eal_remote_launch(tx_thread_main, &tx_params_ab, worker_lcores[2]);
+    rte_eal_remote_launch(rx_thread_main, &rx_params_ba, worker_lcores[3]);
+    rte_eal_remote_launch(prediction_thread_main, &prediction_params_ba, worker_lcores[4]);   
+    rte_eal_remote_launch(tx_thread_main, &tx_params_ba, worker_lcores[5]);
 
     // wait for all threads to exit
     RTE_LCORE_FOREACH_WORKER(lcore_id) {
