@@ -1,0 +1,460 @@
+/*
+ * DPDK L2 Forwarding with Timestamping
+ *
+ * This C++ program implements a high-speed, low-latency packet forwarder
+ * between two DPDK-managed ports (A and B).
+ *
+ * It uses four lcores:
+ * 1. RX (Port A) -> rte_ring (A->B) [Timestamps packet]
+ * 2. rte_ring (A->B) -> TX (Port B)
+ * 3. RX (Port B) -> rte_ring (B->A) [Timestamps packet]
+ * 4. rte_ring (B->A) -> TX (Port A)
+ *
+ */
+
+#include <iostream>
+#include <vector>
+#include <string>
+#include <stdexcept>
+#include <csignal>
+#include <cstdint>
+
+#include <rte_eal.h>
+#include <rte_ethdev.h>
+#include <rte_cycles.h>
+#include <rte_lcore.h>
+#include <rte_mbuf.h>
+#include <rte_mbuf_dyn.h>
+#include <rte_ring.h>
+#include <rte_mempool.h>
+
+// The LEmuRnn class for predicting packet handling based on a trained model.
+#include "lemurnn.h"
+
+#define BURST_SIZE 32
+#define NUM_MBUFS 8191
+#define MBUF_CACHE_SIZE 250
+#define RING_SIZE 16384 // Must be a power of 2
+
+// RX/TX descriptor defaults
+#define RX_DESC_DEFAULT 1024
+#define TX_DESC_DEFAULT 1024
+
+// --- Globals ---
+
+// Flag to signal threads to quit
+volatile bool force_quit = false;
+
+// Offset for the dynamic mbuf field to store our timestamp
+static int timestamp_dynfield_offset = -1;
+static int send_time_dynfield_offset = -1;
+
+// this program uses the TS timer, so we need to know how fast it is
+static uint64_t tsc_rate_uint64;
+static double tsc_rate;
+
+// Helper macro to get the timestamp pointer from an mbuf
+#define TIMESTAMP_FIELD(mbuf) \
+    RTE_MBUF_DYNFIELD((mbuf), timestamp_dynfield_offset, uint64_t*)
+#define SEND_TIME_FIELD(mbuf) \
+    RTE_MBUF_DYNFIELD((mbuf), send_time_dynfield_offset, uint64_t*)
+
+// --- Signal Handler ---
+
+static void signal_handler(int signum) {
+    if (signum == SIGINT || signum == SIGTERM) {
+        std::cout << "\nSignal " << signum << " received, preparing to exit..." << std::endl;
+        force_quit = true;
+    }
+}
+
+// --- Port Initialization ---
+
+/**
+ * @brief Initializes a single DPDK port.
+ * Configures 1 RX queue and 1 TX queue.
+ *
+ * @param port_id The ID of the port to initialize.
+ * @param pool The mbuf pool to associate with the port's RX queue.
+ */
+static void port_init(uint16_t port_id, struct rte_mempool *pool) {
+    struct rte_eth_conf port_conf;
+    struct rte_eth_dev_info dev_info;
+    struct rte_eth_txconf tx_conf;
+    struct rte_eth_rxconf rx_conf;
+    int ret;
+
+    // Basic port configuration
+    memset(&port_conf, 0, sizeof(struct rte_eth_conf));
+    
+    // Get device info
+    ret = rte_eth_dev_info_get(port_id, &dev_info);
+    if (ret != 0) {
+        throw std::runtime_error("Failed to get device info for port " + std::to_string(port_id));
+    }
+
+    // Use default RX/TX configurations
+    rx_conf = dev_info.default_rxconf;
+    tx_conf = dev_info.default_txconf;
+
+    // Enable basic offloads if supported
+    //XXX these macros are deprecated in newer DPDK
+    //	  Just leave them out for now
+    // https://mails.dpdk.org/archives/dev/2021-November/228464.html
+    //if (dev_info.rx_offload_capa & DEV_RX_OFFLOAD_IPV4_CKSUM)
+    //    port_conf.rxmode.offloads |= DEV_RX_OFFLOAD_IPV4_CKSUM;
+    //if (dev_info.rx_offload_capa & DEV_RX_OFFLOAD_UDP_CKSUM)
+    //    port_conf.rxmode.offloads |= DEV_RX_OFFLOAD_UDP_CKSUM;
+    //if (dev_info.rx_offload_capa & DEV_RX_OFFLOAD_TCP_CKSUM)
+    //    port_conf.rxmode.offloads |= DEV_RX_OFFLOAD_TCP_CKSUM;
+	//
+    //if (dev_info.tx_offload_capa & DEV_TX_OFFLOAD_IPV4_CKSUM)
+    //    port_conf.txmode.offloads |= DEV_TX_OFFLOAD_IPV4_CKSUM;
+    //if (dev_info.tx_offload_capa & DEV_TX_OFFLOAD_UDP_CKSUM)
+    //    port_conf.txmode.offloads |= DEV_TX_OFFLOAD_UDP_CKSUM;
+    //if (dev_info.tx_offload_capa & DEV_TX_OFFLOAD_TCP_CKSUM)
+    //    port_conf.txmode.offloads |= DEV_TX_OFFLOAD_TCP_CKSUM;
+
+    // Configure the port with 1 RX queue and 1 TX queue
+    ret = rte_eth_dev_configure(port_id, 1, 1, &port_conf);
+    if (ret != 0) {
+        throw std::runtime_error("rte_eth_dev_configure failed for port " + std::to_string(port_id));
+    }
+
+    // Get socket ID for NUMA-aware memory allocation
+    int socket_id = rte_eth_dev_socket_id(port_id);
+    if (socket_id == SOCKET_ID_ANY) {
+        socket_id = 0;
+    }
+
+    // Setup RX queue (Queue 0)
+    ret = rte_eth_rx_queue_setup(port_id, 0, RX_DESC_DEFAULT, socket_id, &rx_conf, pool);
+    if (ret < 0) {
+        throw std::runtime_error("rte_eth_rx_queue_setup failed for port " + std::to_string(port_id));
+    }
+
+    // Setup TX queue (Queue 0)
+    ret = rte_eth_tx_queue_setup(port_id, 0, TX_DESC_DEFAULT, socket_id, &tx_conf);
+    if (ret < 0) {
+        throw std::runtime_error("rte_eth_tx_queue_setup failed for port " + std::to_string(port_id));
+    }
+
+    // Start the port
+    ret = rte_eth_dev_start(port_id);
+    if (ret < 0) {
+        throw std::runtime_error("rte_eth_dev_start failed for port " + std::to_string(port_id));
+    }
+
+    // Enable promiscuous mode
+    ret = rte_eth_promiscuous_enable(port_id);
+    if (ret != 0) {
+        throw std::runtime_error("rte_eth_promiscuous_enable failed for port " + std::to_string(port_id));
+    }
+
+    std::cout << "Port " << port_id << " initialized successfully." << std::endl;
+}
+
+// --- LCore Function Parameters ---
+
+struct rx_lcore_params {
+    uint16_t port_id;
+    struct rte_ring *ring;
+};
+
+struct tx_lcore_params {
+    uint16_t port_id;
+    struct rte_ring *ring;
+};
+
+// --- LCore Thread Functions ---
+
+static inline double compute_latency(uint64_t inter_packet_time_ms, uint16_t packet_size) {
+  return 0.0;
+}
+
+/**
+ * RX thread
+ * - pulls incoming packets from queue
+ * - get arrival timestamp and compute inter-packet time
+ * - use lemurnn model to predict latency and drop status
+ * - discard or record expect TX time and push to latency queue
+ */
+static int rx_thread_main(void *arg) {
+    struct rx_lcore_params *params = (struct rx_lcore_params *)arg;
+    uint16_t port_id = params->port_id;
+    struct rte_ring *ring = params->ring;
+    struct rte_mbuf *bufs[BURST_SIZE];
+    uint16_t nb_rx, nb_enq, i;
+
+    uint32_t lcore_id = rte_lcore_id();
+    std::cout << "Starting RX thread on lcore " << lcore_id << " for port " << port_id << std::endl;
+
+    // initialize a LEmuRnn model for this thread
+    // XXX this should be a cmd-line arg, and the hidden size and num layers should be too
+    //     Or they should be saved along with the model.
+    //const std::string MODEL_PATH = "/users/brenton/lemu-forwarder/modelstate-torchscript-96-l3-s32-in4-out3.pt";
+    const std::string MODEL_PATH = "/users/brenton/lemu-forwarder/modelstate-torchscript-1684-droprelurnn-l4_h64-bscq_bd.pt";
+    //const int HIDDEN_SIZE = 32;
+    //const int NUM_LAYERS = 3;
+    const int HIDDEN_SIZE = 64;
+    const int NUM_LAYERS = 4;
+    const double CAPACITY = 5;
+    const double QUEUE_SIZE = 10;
+    LEmuRnn model(MODEL_PATH, NUM_LAYERS, HIDDEN_SIZE, CAPACITY, QUEUE_SIZE);
+    
+    // need to keep track of the arrival time of the last packet
+    uint64_t last_packet_time = 0;
+
+    while (!force_quit) {
+        nb_rx = rte_eth_rx_burst(port_id, 0, bufs, BURST_SIZE);
+        if (nb_rx == 0) {
+            continue; // Busy-wait
+        }
+
+        // arrival timestamp from TSC clock
+        // https://doc.dpdk.org/api-1.6/rte__cycles_8h.html
+        uint64_t now = rte_rdtsc();
+
+        // 3. Attach timestamp to each packet
+        for (i = 0; i < nb_rx; i++) {
+            uint16_t size_byte = rte_pktmbuf_pkt_len(bufs[i]);
+            double size_kbyte = ((double)size_byte)/1000.0;
+            uint64_t inter_packet_time_tsc = now - last_packet_time;
+            double inter_packet_time_ms = 1000.0*((double)inter_packet_time_tsc)/tsc_rate;
+
+            // When the program first starts, or if the link has been idle for awhile, 
+            // the inter-packet time will be way outside the range the model has been
+            // trained for.  In these cases, assume the system is empty anyway and
+            // start from zero.
+            if (inter_packet_time_ms > 1000.0*30.0) {
+                inter_packet_time_ms = 0.0;
+                //XXX should we also reset the model hidden state?
+            }
+            std::cout << "packet arrival[" << port_id << "]: " << inter_packet_time_ms
+                 << "\t" << size_kbyte << std::endl;
+            LEmuRnn::PacketAction pa = model.predict(inter_packet_time_ms, size_kbyte);
+            if (pa.drop) {
+                rte_pktmbuf_free(bufs[i]);
+                std::cout << "\tdrop!!" << std::endl;
+            } else {
+                //LEmuRnn::PacketAction pa = {1.5, true};
+                std::cout << "\tPacket Action[" << port_id << "]: " << pa.latency_ms
+                          << "\t" << pa.drop << std::endl;
+                uint64_t send_time_tsc = now + (uint64_t)(pa.latency_ms * tsc_rate / 1000.0);
+                //uint64_t send_time_tsc = now + (uint64_t)(pa.latency_ms * 1.0);
+                std::cout << now << "\t" << inter_packet_time_tsc  << "\t" << inter_packet_time_ms
+                          << "\t" << pa.latency_ms << "\t" << send_time_tsc << std::endl;
+                *TIMESTAMP_FIELD(bufs[i]) = now;
+                *SEND_TIME_FIELD(bufs[i]) = send_time_tsc;
+                nb_enq = rte_ring_sp_enqueue(ring, (void *)bufs[i]);
+                if (unlikely(nb_enq != 1)) {
+                    rte_pktmbuf_free(bufs[i]);
+                }
+            }
+            last_packet_time = now;
+        }
+    }
+
+    std::cout << "Exiting RX thread on lcore " << lcore_id << std::endl;
+    return 0;
+}
+
+/**
+ * TX thread
+ * - dequeue packets from the rte_ring
+ * - read out their intended send time
+ * - busy-wait until the time arrives
+ * - send out the packet
+ */
+static int tx_thread_main(void *arg) {
+    struct tx_lcore_params *params = (struct tx_lcore_params *)arg;
+    uint16_t port_id = params->port_id;
+    struct rte_ring *ring = params->ring;
+    struct rte_mbuf *bufs[BURST_SIZE];
+    uint16_t nb_dq, nb_tx, i;
+    uint64_t timestamp, send_time_tsc;
+    
+    uint32_t lcore_id = rte_lcore_id();
+    std::cout << "Starting TX thread on lcore " << lcore_id << " for port " << port_id << std::endl;
+    
+    uint64_t now = rte_rdtsc();
+    while (!force_quit) {
+        now = rte_rdtsc();
+        
+        nb_dq = rte_ring_sc_dequeue_burst(ring, (void **)bufs, BURST_SIZE, NULL);
+        if (nb_dq == 0) {
+            continue;
+        }
+
+        // using BURST_SIZE>1, we have to loop over the possibly multiple mbufs.
+        for (i = 0; i < nb_dq; i++) {
+            timestamp = *TIMESTAMP_FIELD(bufs[i]);
+            send_time_tsc = *SEND_TIME_FIELD(bufs[i]);
+            // busy-wait until it is time to send this one.
+            if (now < send_time_tsc)
+                std::cout << "TX[" << port_id << "]:  waiting tsc: " << (send_time_tsc - now) << std::endl;
+            while (now < send_time_tsc && !force_quit) {
+                //std::cout << "now < send_time_tsc\t" << now << "\t" << send_time_tsc << std::endl;
+                now = rte_rdtsc();
+            }
+
+            // aaaand off she goes...
+            nb_tx = rte_eth_tx_burst(port_id, 0, &(bufs[i]), 1);
+
+            // if the mbuf failed to send, free it
+            // don't expect this to ever happen            
+            if (unlikely(nb_tx != 1)) {
+                rte_pktmbuf_free(bufs[i]);
+            }
+        }
+    }
+
+    std::cout << "Exiting TX thread on lcore " << lcore_id << std::endl;
+    return 0;
+}
+
+/**
+ * main()
+ */
+int main(int argc, char *argv[]) {
+    int ret;
+    uint16_t port_a, port_b;
+    uint16_t nb_ports;
+    uint32_t lcore_id;
+    struct rte_mempool *mbuf_pool;
+    struct rte_ring *ring_a_to_b, *ring_b_to_a;
+
+    ret = rte_eal_init(argc, argv);
+    if (ret < 0) {
+        rte_exit(EXIT_FAILURE, "Error with EAL initialization\n");
+    }
+    argc -= ret;
+    argv += ret;
+
+    if (argc < 3) {
+        rte_exit(EXIT_FAILURE, "Usage: %s [EAL_ARGS] <PORT_A_ID> <PORT_B_ID>\n", argv[0]);
+    }
+    try {
+        port_a = (uint16_t)std::stoul(argv[1]);
+        port_b = (uint16_t)std::stoul(argv[2]);
+    } catch (const std::exception &e) {
+        rte_exit(EXIT_FAILURE, "Invalid port ID argument: %s\n", e.what());
+    }
+
+    signal(SIGINT, signal_handler);
+    signal(SIGTERM, signal_handler);
+
+    if (rte_lcore_count() < 5) { // 1 main + 4 workers
+        rte_exit(EXIT_FAILURE, "This application requires at least 4 worker lcores (5 total).\n");
+    }
+
+    nb_ports = rte_eth_dev_count_avail();
+    if (port_a >= nb_ports || port_b >= nb_ports) {
+        rte_exit(EXIT_FAILURE, "Invalid port ID. Available ports: %u\n", nb_ports);
+    }
+
+    // create the mbuf pool
+    mbuf_pool = rte_pktmbuf_pool_create("MBUF_POOL", NUM_MBUFS,
+        MBUF_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
+    if (mbuf_pool == NULL) {
+        rte_exit(EXIT_FAILURE, "Cannot create mbuf pool: %s\n", rte_strerror(rte_errno));
+    }
+
+    // register the dynamic mbuf field for the timestamp
+    static const struct rte_mbuf_dynfield timestamp_dynfield_desc = {
+        .name = "l2fwd_timestamp_field",
+        .size = sizeof(uint64_t),
+        .align = __alignof(uint64_t),
+    };
+    timestamp_dynfield_offset = rte_mbuf_dynfield_register(&timestamp_dynfield_desc);
+    if (timestamp_dynfield_offset < 0) {
+        rte_exit(EXIT_FAILURE, "Cannot register mbuf dynfield: %s\n", rte_strerror(rte_errno));
+    }
+    static const struct rte_mbuf_dynfield send_time_dynfield_desc = {
+        .name = "l2fwd_send_time_field",
+        .size = sizeof(uint64_t),
+        .align = __alignof(uint64_t),
+    };
+    send_time_dynfield_offset = rte_mbuf_dynfield_register(&send_time_dynfield_desc);
+    if (send_time_dynfield_offset < 0) {
+        rte_exit(EXIT_FAILURE, "Cannot register mbuf dynfield: %s\n", rte_strerror(rte_errno));
+    }
+
+    // initialize ports
+    try {
+        port_init(port_a, mbuf_pool);
+        port_init(port_b, mbuf_pool);
+    } catch (const std::exception &e) {
+        rte_exit(EXIT_FAILURE, "Port initialization failed: %s\n", e.what());
+    }
+
+    // create the two rte_rings
+    ring_a_to_b = rte_ring_create("RING_A_TO_B", RING_SIZE, rte_socket_id(),
+                                  RING_F_SP_ENQ | RING_F_SC_DEQ); // Single-Producer, Single-Consumer
+    ring_b_to_a = rte_ring_create("RING_B_TO_A", RING_SIZE, rte_socket_id(),
+                                  RING_F_SP_ENQ | RING_F_SC_DEQ);
+    
+    if (ring_a_to_b == NULL || ring_b_to_a == NULL) {
+        rte_exit(EXIT_FAILURE, "Cannot create rings: %s\n", rte_strerror(rte_errno));
+    }
+
+    // assign tasks to lcores
+    std::vector<uint32_t> worker_lcores;
+    RTE_LCORE_FOREACH_WORKER(lcore_id) {
+        worker_lcores.push_back(lcore_id);
+    }
+    if (worker_lcores.size() < 4) {
+        rte_exit(EXIT_FAILURE, "Could not find 4 worker lcores. Found %zu.\n", worker_lcores.size());
+    }
+
+    static struct rx_lcore_params rx_params_a, rx_params_b;
+    static struct tx_lcore_params tx_params_a, tx_params_b;
+
+    // flow: A -> B
+    rx_params_a = {port_a, ring_a_to_b};
+    tx_params_b = {port_b, ring_a_to_b};
+
+    // flow: B -> A
+    rx_params_b = {port_b, ring_b_to_a};
+    tx_params_a = {port_a, ring_b_to_a};
+
+    std::cout << "Main lcore " << rte_lcore_id() << " launching threads..." << std::endl;
+    std::cout << "  lcore " << worker_lcores[0] << ": RX Port A (" << port_a << ") -> Ring A->B" << std::endl;
+    std::cout << "  lcore " << worker_lcores[1] << ": Ring A->B -> TX Port B (" << port_b << ")" << std::endl;
+    std::cout << "  lcore " << worker_lcores[2] << ": RX Port B (" << port_b << ") -> Ring B->A" << std::endl;
+    std::cout << "  lcore " << worker_lcores[3] << ": Ring B->A -> TX Port A (" << port_a << ")" << std::endl;
+
+    // find out what our time units are
+    tsc_rate_uint64 = rte_get_timer_hz();	
+    tsc_rate = (double)tsc_rate_uint64;
+    std::cout << "TSC rate: " << tsc_rate_uint64 << "\t" << tsc_rate << std::endl;
+
+    // launch threads
+    rte_eal_remote_launch(rx_thread_main, &rx_params_a, worker_lcores[0]);
+    rte_eal_remote_launch(tx_thread_main, &tx_params_b, worker_lcores[1]);
+    rte_eal_remote_launch(rx_thread_main, &rx_params_b, worker_lcores[2]);
+    rte_eal_remote_launch(tx_thread_main, &tx_params_a, worker_lcores[3]);
+
+    // wait for all threads to exit
+    RTE_LCORE_FOREACH_WORKER(lcore_id) {
+        if (rte_eal_wait_lcore(lcore_id) < 0) {
+            std::cerr << "Error waiting for lcore " << lcore_id << std::endl;
+        }
+    }
+
+    std::cout << "Shutting down..." << std::endl;
+    rte_eth_dev_stop(port_a);
+    rte_eth_dev_close(port_a);
+    rte_eth_dev_stop(port_b);
+    rte_eth_dev_close(port_b);
+
+    // Note: Rings and mempools are automatically freed on EAL cleanup
+    // rte_ring_free(ring_a_to_b);
+    // rte_ring_free(ring_b_to_a);
+    // rte_mempool_free(mbuf_pool);
+
+    rte_eal_cleanup();
+    std::cout << "Done." << std::endl;
+
+    return 0;
+}
