@@ -152,7 +152,7 @@ def analyze_packet_trace(trace_data):
                 'rx_time': timestamp
             }
 
-        # Interfaces 3 (C->B) and 4 (B->A) are ignored for this specific A->B->C analysis.
+        # Interfaces 0 (C->B) and 3 (B->A) are ignored for this specific A->B->C analysis.
 
     # Process the final experiment's data after the loop finishes.
     # The loop-based logic only processes a batch when the *next* one begins.

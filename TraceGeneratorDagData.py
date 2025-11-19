@@ -93,7 +93,7 @@ class TraceGeneratorDagData(TraceGenerator):
                 sys.exit(0)
 
         c_val, l_val, q_val = self.parse_filename(sample_filename)
-        # the CAP value is Mbit/s = KByte/ms.  No need to convert.
+        # the CAP value is Mbit/s = Kbit/ms.  No need to convert.
         capacity_s = np.float32(c_val)
 
         # queue size is in Bytes, so convert to KByte

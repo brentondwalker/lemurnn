@@ -7,10 +7,10 @@ class LinkProperties:
     max_arrival_rate:float
     min_capacity: float
     max_capacity: float
-    min_pkt_size: int
-    max_pkt_size: int
-    min_queue_bytes: int
-    max_queue_bytes:int
+    min_pkt_size: float  #int
+    max_pkt_size: float  #int
+    min_queue_bytes: float  #int
+    max_queue_bytes: float  #int
     #inter_pkt_time:float = 1.0  # Average time between packets (seconds per packet)
     #seq_length:int = 128  # Length of each sequence
 
@@ -82,5 +82,24 @@ link_properties_library = {
                                max_pkt_size=1500,
                                min_queue_bytes=5 * 1000,
                                max_queue_bytes=10 * 1000),  # 10 average-sized packets
+
+    'experiment': LinkProperties(min_arrival_rate=1.25,   # 1 Mbps
+                                  max_arrival_rate=12.5,  # 12.5 pkt/ms = 1250 pkt/s ~~ 10Mbps
+                                  min_capacity=1,  # 1 Kb/ms
+                                  max_capacity=10,   # 10 Kb/ms
+                                  min_pkt_size=0.500,  # 0.5 KB = 500 B
+                                  max_pkt_size=1.500,# 1.5 Kb = 1500 B
+                                  min_queue_bytes=5, # 5 KB
+                                  max_queue_bytes=50),# 50 average-sized packets
+
+    # same as experiment but wider range of rates and capacities and pkt sizes
+    'experiment2': LinkProperties(min_arrival_rate=0.001,  # 0.001pkt/ms = 1 pkt/s ~~ ping
+                                 max_arrival_rate=12.5,  # 12.5 pkt/ms = 1250 pkt/s ~~ 10Mbps
+                                 min_capacity=0.5,  # 0.5 Kb/ms
+                                 max_capacity=20,  # 20 Kb/ms
+                                 min_pkt_size=0.1,  # 0.1 KB = 100 B
+                                 max_pkt_size=1.500,  # 1.5 Kb = 1500 B
+                                 min_queue_bytes=5,  # 5 KB
+                                 max_queue_bytes=50),  # 50 average-sized packets
 
 }
