@@ -49,7 +49,13 @@ ITERATIONS = 32
 PAUSE_SECONDS = 5
 
 # number of packets to run in each sample
-PACKET_SEQUENCE_LENGTH = 1024
+#PACKET_SEQUENCE_LENGTH = 1024
+# for the really low-rate experiments, we can't wait 15 mins per run.
+#PACKET_SEQUENCE_LENGTH = 256
+# for the really high-rate experiments, we can collect some extra trace.
+# though our current training code doesn't use it...
+PACKET_SEQUENCE_LENGTH = 4096
+
 
 # remote working directory (home directories shared over NFS in your environment)
 EMULAB_HOME = "/users/brenton"
@@ -302,7 +308,7 @@ def stop_pid(ssh: paramiko.SSHClient, pid: int) -> None:
 
 def main():
     # pick random CAP,LAT,QUE in [1,10]
-    min_pkt_size = 0
+    min_pkt_size = 60
     max_pkt_size = 1400
     mean_pkt_size = (min_pkt_size + max_pkt_size)/2
     min_capacity = 1
