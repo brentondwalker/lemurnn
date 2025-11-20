@@ -33,10 +33,6 @@ PacketRecord = namedtuple('PacketRecord', [
     'dropped_status'
 ])
 
-# Interface definitions for the A--B--C path we are interested in
-TX_INTERFACE = 2  # A -> B (Transmit time)
-RX_INTERFACE = 1  # B -> C (Receive time)
-
 
 def compute_latencies(tx_packets:dict, rx_packets:dict):
 
@@ -86,7 +82,7 @@ def compute_latencies(tx_packets:dict, rx_packets:dict):
     return analysis_records
 
 
-def analyze_packet_trace(trace_data):
+def analyze_packet_trace(trace_data, tx_interface, rx_interface):
     """
     Processes a list of packet events from a simulated ERF trace to determine
     latency and dropped status for the A -> B -> C path.
@@ -124,8 +120,10 @@ def analyze_packet_trace(trace_data):
         timestamp = event['timestamp']
         size = event['size']
 
+        #print(f"interface: {interface}")
+
         # check if this is the start of the next experiment
-        if interface == TX_INTERFACE:
+        if interface == tx_interface:
             if (timestamp - last_tx_time) > 4.0:
                 latency_results = compute_latencies(tx_packets, rx_packets)
                 print_results(latency_results)
@@ -143,7 +141,7 @@ def analyze_packet_trace(trace_data):
             }
             last_tx_time = timestamp
 
-        elif interface == RX_INTERFACE:
+        elif interface == rx_interface:
             # Record the receive event (B->C)
             if packet_id in rx_packets:
                 # Handle a potential rare duplicate capture, we only care about the first one.
@@ -151,8 +149,6 @@ def analyze_packet_trace(trace_data):
             rx_packets[packet_id] = {
                 'rx_time': timestamp
             }
-
-        # Interfaces 0 (C->B) and 3 (B->A) are ignored for this specific A->B->C analysis.
 
     # Process the final experiment's data after the loop finishes.
     # The loop-based logic only processes a batch when the *next* one begins.
@@ -206,7 +202,7 @@ def parse_filename(filename):  # <-- ADDED
         return None, None, None
 
 
-def save_results_to_csv(records, base_filename, experiment_number):
+def save_results_to_csv(records, base_filename, experiment_number, seq_len=1024):
     """Saves a list of PacketRecord results to a CSV file."""
     if not records:
         print(f"No records to save for experiment {experiment_number}.")
@@ -214,24 +210,27 @@ def save_results_to_csv(records, base_filename, experiment_number):
 
     csv_filename = f"{base_filename}_{experiment_number}.csv"
 
-    try:
-        with open(csv_filename, 'w', newline='') as csvfile:
-            writer = csv.writer(csvfile, delimiter='\t')
-            # Write the header
-            writer.writerow(PacketRecord._fields)
-            # Write the data rows
-            writer.writerows(records)
-        print(f"Results for experiment {experiment_number} saved to {csv_filename}")
-    except IOError as e:
-        print(f"Error: Could not write to file {csv_filename}. Reason: {e}", file=sys.stderr)
+    if len(records) < seq_len:
+        print(f"Discarding experiment {experiment_number}: too short ({len(records)} packets < {seq_len})")
+    else:
+        try:
+            with open(csv_filename, 'w', newline='') as csvfile:
+                writer = csv.writer(csvfile, delimiter='\t')
+                # Write the header
+                writer.writerow(PacketRecord._fields)
+                # Write the data rows
+                writer.writerows(records)
+            print(f"Results for experiment {experiment_number} saved to {csv_filename}")
+        except IOError as e:
+            print(f"Error: Could not write to file {csv_filename}. Reason: {e}", file=sys.stderr)
 
 
-def save_as_tensor(experiment_traces, erf_filename, base_output_filename):  # <-- ADDED
+def save_as_tensor(experiment_traces, erf_filename, base_output_filename, seq_len=1024):  # <-- ADDED
     """
     Processes the list of experiment traces, filters/truncates them,
     calculates features, and saves them as a single 3D PyTorch tensor.
 
-    Tensor Shape: (num_valid_experiments, 1024, 7)
+    Tensor Shape: (num_valid_experiments, EXPERIMENT_SIZE, 7)
     Features: [t, b, s, c, q, l, d]
     - t = inter-packet times
     - b = inter-pkt time * capacity
@@ -259,12 +258,12 @@ def save_as_tensor(experiment_traces, erf_filename, base_output_filename):  # <-
         exp_num = i + 1
 
         # 3. Apply filtering rules
-        if len(experiment_records) < 1024:
-            print(f"  Discarding experiment {exp_num}: too short ({len(experiment_records)} packets < 1024)")
+        if len(experiment_records) < seq_len:
+            print(f"  Discarding experiment {exp_num}: too short ({len(experiment_records)} packets < {seq_len})")
             continue
 
         # Truncate if longer
-        records = experiment_records[:1024]
+        records = experiment_records[:seq_len]
         print(f"  Processing experiment {exp_num}: {len(records)} packets.")
 
         # 4. Calculate features for this experiment
@@ -309,7 +308,7 @@ def save_as_tensor(experiment_traces, erf_filename, base_output_filename):  # <-
 
     # 5. Convert to a single 3D tensor and save
     if not all_valid_experiments:
-        print("No valid experiments (>= 1024 packets) found. No tensor file created.")
+        print(f"No valid experiments (>= {seq_len} packets) found. No tensor file created.")
         return
 
     try:
@@ -432,12 +431,19 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description="Analyze A->B->C packet latency and drops from an ERF trace file."
     )
+    parser.add_argument("-t", '--tx_interface', type=int, default=0)
+    parser.add_argument("-r", '--rx_interface', type=int, default=3)
+    parser.add_argument("-s", '--sequence_length', type=int, default=1024)
     parser.add_argument(
         "erf_files",  # Changed from "erf_file"
         nargs='+',      # Accept one or more file paths
         help="Path(s) to the .erf packet capture file(s)."
     )
     args = parser.parse_args()
+
+    tx_interface = args.tx_interface
+    rx_interface = args.rx_interface
+    sequence_length = args.sequence_length
 
     # Iterate over each file provided on the command line
     total_files = len(args.erf_files)
@@ -457,17 +463,17 @@ if __name__ == '__main__':
             continue
 
         # 2. Run the analysis (this function is unchanged)
-        results = analyze_packet_trace(trace_data)
+        results = analyze_packet_trace(trace_data, tx_interface, rx_interface)
 
         experiment_number = 0
         for trace in results:
-            save_results_to_csv(trace, base_filename, experiment_number)
+            save_results_to_csv(trace, base_filename, experiment_number, sequence_length)
             experiment_number += 1
 
         print(f"Extracted {len(results)} experiments.")
 
         # 3. Save the results to a PyTorch tensor file  # <-- ADDED
-        save_as_tensor(results, erf_file, base_filename)
+        save_as_tensor(results, erf_file, base_filename, sequence_length)
 
     print(f"\n\n{'='*80}")
     print(f"--- All {total_files} files processed. ---")
