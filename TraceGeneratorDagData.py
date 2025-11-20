@@ -33,7 +33,7 @@ class TraceGeneratorDagData(TraceGenerator):
         # make an index of all the sample files, and
         self.sample_files = []
         for dir_name in self.datadirs:
-            self.sample_files += (glob.glob(f"{dir_name}/mgtrace_C*_L*_Q*_*_*.csv", recursive=True))
+            self.sample_files += (glob.glob(f"{dir_name}/**/mgtrace_C*_L*_Q*_*_*.csv", recursive=True))
         print(f"TraceGeneratorDagData: identified {len(self.sample_files)} samples")
         self.sample_sequence = np.random.permutation(len(self.sample_files))
         self.sample_index = 0
