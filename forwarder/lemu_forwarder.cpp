@@ -56,6 +56,15 @@ static int send_time_dynfield_offset = -1;
 static uint64_t tsc_rate_uint64;
 static double tsc_rate;
 
+// global info about the prediction model being used
+static int hidden_size = 0;
+static int num_layers = 0;
+static std::string model_type = "rnn";
+static std::string model_file;
+static double capacity = 1.0;      // units of [Kbit/ms]=[Mbit/s]
+static double queue_size = 5.0; // units of [KByte]
+
+
 // Helper macro to get the timestamp pointer from an mbuf
 #define TIMESTAMP_FIELD(mbuf) \
     RTE_MBUF_DYNFIELD((mbuf), timestamp_dynfield_offset, uint64_t*)
@@ -211,6 +220,7 @@ static int rx_thread_main(void *arg) {
         nb_enq = rte_ring_sp_enqueue_burst(ring, (void * const *)bufs, nb_rx, NULL);
         if (unlikely(nb_enq < nb_rx)) {
             rte_pktmbuf_free_bulk(&bufs[nb_enq], nb_rx - nb_enq);
+	    std::cout << "WARNING: RX thread dropped packets because rte_ring is full!" << std::endl;
         }
     }
 
@@ -239,12 +249,13 @@ static int prediction_thread_main(void *arg) {
     // initialize a LEmuRnn model for this thread
     // XXX this should be a cmd-line arg, and the hidden size and num layers should be too
     //     Or they should be saved along with the model.
-    const std::string MODEL_PATH = "/users/brenton/lemu-forwarder/modelstate-torchscript-1684-droprelurnn-l4_h64-bscq_bd.pt";
-    const int HIDDEN_SIZE = 64;
-    const int NUM_LAYERS = 4;
-    const double CAPACITY = 5;
-    const double QUEUE_SIZE = 10;
-    LEmuRnn model(MODEL_PATH, NUM_LAYERS, HIDDEN_SIZE, CAPACITY, QUEUE_SIZE);
+    //const std::string MODEL_PATH = "/users/brenton/lemu-forwarder/modelstate-torchscript-1684-droprelurnn-l4_h64-bscq_bd.pt";
+    const std::string MODEL_PATH = "/users/brenton/lemurnn/forwarder/modelstate-torchscript-442-droprelurnn-l4_h64-bscq_bd-midlight.pt";
+    //const int HIDDEN_SIZE = 64;
+    //const int NUM_LAYERS = 4;
+    //const double CAPACITY = 5;
+    //const double QUEUE_SIZE = 10;
+    LEmuRnn model(model_file, num_layers, hidden_size, capacity, queue_size);
     
     // need to keep track of the arrival time of the last packet
     uint64_t last_packet_time_tsc = 0;
@@ -286,6 +297,7 @@ static int prediction_thread_main(void *arg) {
                 nb_enq = rte_ring_sp_enqueue(ring_out, (void *)bufs[i]);
                 if (unlikely(nb_enq != 1)) {
                     rte_pktmbuf_free(bufs[i]);
+		    std::cout << "WARNING: PREDICTION thread dropped packets because rte_ring is full!" << std::endl;
                 }
             }
             last_packet_time_tsc = arrival_tsc;
@@ -342,6 +354,7 @@ static int tx_thread_main(void *arg) {
             // don't expect this to ever happen            
             if (unlikely(nb_tx != 1)) {
                 rte_pktmbuf_free(bufs[i]);
+		std::cout << "WARNING: TX thread dropped packets because transmit queue is full!" << std::endl;
             }
         }
     }
@@ -349,6 +362,84 @@ static int tx_thread_main(void *arg) {
     std::cout << "Exiting TX thread on lcore " << lcore_id << std::endl;
     return 0;
 }
+
+static void print_usage(char *program_name) {
+    std::cerr << "Usage: " << program_name
+	      << " -h <hidden_size> -l <layers> -m <model_file> -c <capacity(Mb/s)> -q <queuesize(KB)> -t <model_type>\n";
+}
+
+/**
+ * Method to parse the command line args.
+ * I'm sloppy here and just store them in global vars declared at the top.
+ */
+int parse_options(int argc, char *argv[]) {
+
+    int opt;
+    while ((opt = getopt(argc, argv, "h:l:m:c:q:t:")) != -1) {
+        switch (opt) {
+        case 'h':
+            try {
+                // optarg is a global char* pointer set by getopt containing the value
+                hidden_size = std::stoi(optarg);
+            } catch (const std::invalid_argument&) {
+                std::cerr << "Error: -h requires a valid integer.\n";
+                return 1;
+            }
+            break;
+        case 'l':
+            try {
+                num_layers = std::stoi(optarg);
+            } catch (const std::invalid_argument&) {
+                std::cerr << "Error: -l requires a valid integer.\n";
+                return 1;
+            }
+            break;
+        case 'c':
+            try {
+                capacity = std::stod(optarg);
+            } catch (const std::invalid_argument&) {
+                std::cerr << "Error: -c requires a valid double.\n";
+                return 1;
+            }
+            break;
+        case 'q':
+            try {
+                queue_size = std::stod(optarg);
+            } catch (const std::invalid_argument&) {
+                std::cerr << "Error: -q requires a valid double.\n";
+                return 1;
+            }
+            break;
+        case 'm':
+            model_file = optarg;
+            break;
+        case 't':
+            model_type = optarg;
+            break;
+        default:
+            print_usage(argv[0]);
+            return 1;
+        }
+    }
+
+    // Validation check
+    if (hidden_size == 0 || num_layers == 0 || model_file.empty()) {
+        std::cerr << "Error: Missing required arguments.\n";
+	print_usage(argv[0]);
+        return 1;
+    }
+
+    std::cout << "--- POSIX Getopt Parsed ---\n";
+    std::cout << "Hidden Size: " << hidden_size << "\n";
+    std::cout << "Num Layers:  " << num_layers << "\n";
+    std::cout << "Model File:  " << model_file << "\n";
+    std::cout << "Capacity:    " << capacity << "\n";
+    std::cout << "Queue size:  " << queue_size << "\n";
+    std::cout << "Model type:  " << model_type << "\n";
+
+    return 0;
+}
+
 
 /**
  * main()
@@ -362,6 +453,7 @@ int main(int argc, char *argv[]) {
     struct rte_ring *ring_rx_to_prediction_ab, *ring_prediction_to_tx_ab;
     struct rte_ring *ring_rx_to_prediction_ba, *ring_prediction_to_tx_ba;
 
+    // dpdk gets to parse the args before the "--"
     ret = rte_eal_init(argc, argv);
     if (ret < 0) {
         rte_exit(EXIT_FAILURE, "Error with EAL initialization\n");
@@ -369,14 +461,23 @@ int main(int argc, char *argv[]) {
     argc -= ret;
     argv += ret;
 
+    // next parse the port/device numbers
     if (argc < 3) {
         rte_exit(EXIT_FAILURE, "Usage: %s [EAL_ARGS] <PORT_A_ID> <PORT_B_ID>\n", argv[0]);
     }
     try {
         port_a = (uint16_t)std::stoul(argv[1]);
         port_b = (uint16_t)std::stoul(argv[2]);
+	argc -= 2;
+	argv += 2;
     } catch (const std::exception &e) {
         rte_exit(EXIT_FAILURE, "Invalid port ID argument: %s\n", e.what());
+    }
+
+    // finally we parse the prediction model options
+    if (parse_options(argc, argv)) {
+        std::cerr << "ERROR: command line parsing error." << std::endl;
+        return 1;
     }
 
     signal(SIGINT, signal_handler);
