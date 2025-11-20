@@ -313,8 +313,8 @@ def main():
     queue_increment = 10 * int(mean_pkt_size)
     min_latency = 0
     max_latency = 0
-    min_rate = 0.01
-    max_rate = 0.5
+    min_rate = 0.5
+    max_rate = 100
     #CAP = random.randint(1, 10)
     #LAT = random.randint(0, 0)
     #QUE = random.randint(2, 10) * max_pkt_size  # mult by max packet size?
