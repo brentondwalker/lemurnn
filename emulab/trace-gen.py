@@ -54,7 +54,7 @@ PAUSE_SECONDS = 5
 #PACKET_SEQUENCE_LENGTH = 256
 # for the really high-rate experiments, we can collect some extra trace.
 # though our current training code doesn't use it...
-PACKET_SEQUENCE_LENGTH = 4096
+PACKET_SEQUENCE_LENGTH = 1024
 
 
 # remote working directory (home directories shared over NFS in your environment)
@@ -317,10 +317,15 @@ def main():
     min_queue = 5 * int(mean_pkt_size)
     max_queue = 100 * int(mean_pkt_size)
     queue_increment = 10 * int(mean_pkt_size)
+    #min_queue = 5  # packet queue
+    #max_queue = 100
+    #queue_increment = 10
     min_latency = 0
     max_latency = 0
     min_rate = 0.5
     max_rate = 100
+    #min_rate = 0.01
+    #max_rate = 20
     #CAP = random.randint(1, 10)
     #LAT = random.randint(0, 0)
     #QUE = random.randint(2, 10) * max_pkt_size  # mult by max packet size?
@@ -357,10 +362,6 @@ def main():
     run_command(conns["dag01"], f"mkdir -p {DAG_WORKDIR}", timeout=120)
 
     for CAP in range(min_capacity, max_capacity+1, capacity_increment):
-        # use rate in the same units as CAPACITY: Mbps
-        # need to convert it later
-        min_rate = int(CAP * 0.5)
-        max_rate = int(CAP * 1.5)
 
         for QUE in range(min_queue, max_queue+1, queue_increment):
 
