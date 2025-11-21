@@ -64,6 +64,9 @@ static std::string model_file;
 static double capacity = 1.0;      // units of [Kbit/ms]=[Mbit/s]
 static double queue_size = 5.0; // units of [KByte]
 
+double packets_total = 0.0;
+double packets_dropped = 0.0;
+
 
 // Helper macro to get the timestamp pointer from an mbuf
 #define TIMESTAMP_FIELD(mbuf) \
@@ -242,7 +245,9 @@ static int prediction_thread_main(void *arg) {
     struct rte_ring *ring_out = params->ring_out;
     struct rte_mbuf *bufs[BURST_SIZE];
     uint16_t nb_dq, nb_enq, i;
-
+    uint64_t prediction_timer = 0;
+    double prediction_time_ms = 0.0;
+    
     uint32_t lcore_id = rte_lcore_id();
     std::cout << "Starting PREDICTION thread on lcore " << lcore_id << std::endl;
 
@@ -263,6 +268,7 @@ static int prediction_thread_main(void *arg) {
     while (!force_quit) {
         nb_dq = rte_ring_sc_dequeue_burst(ring_in, (void **)bufs, BURST_SIZE, NULL);
         if (nb_dq == 0) continue;
+	std::cout << "PREDICTION thread dequeued: " << nb_dq << std::endl;
 
         for (i = 0; i < nb_dq; i++) {
             uint64_t arrival_tsc = *TIMESTAMP_FIELD(bufs[i]);
@@ -270,20 +276,29 @@ static int prediction_thread_main(void *arg) {
             double size_kbyte = ((double)size_byte)/1000.0;
             uint64_t inter_packet_time_tsc = arrival_tsc - last_packet_time_tsc;
             double inter_packet_time_ms = 1000.0*((double)inter_packet_time_tsc)/tsc_rate;
+	    //double processed_kbit = inter_packet_time_ms * capacity;
 
             // When the program first starts, or if the link has been idle for awhile, 
             // the inter-packet time will be way outside the range the model has been
             // trained for.  In these cases, assume the system is empty anyway and
             // start from zero.
-            if (inter_packet_time_ms > 1000.0*30.0) {
+            if (inter_packet_time_ms > 1000.0 * 30.0) {
+                packets_total = 0;
+                packets_dropped = 0;
                 inter_packet_time_ms = 0.0;
                 //XXX should we also reset the model hidden state?
             }
             //std::cout << "packet prediction: " << inter_packet_time_ms
             //     << "\t" << size_kbyte << std::endl;
             //LEmuRnn::PacketAction pa = {1.5, true};
+
+	    prediction_timer = rte_rdtsc();
             LEmuRnn::PacketAction pa = model.predict(inter_packet_time_ms, size_kbyte);
+	    prediction_time_ms = 1000.0*(((double)(rte_rdtsc() - prediction_timer))/tsc_rate);
+	    std::cout << "\tprediction took ms: " << prediction_time_ms << std::endl;
+	    packets_total += 1;
             if (pa.drop) {
+                packets_dropped += 1;
                 rte_pktmbuf_free(bufs[i]);
                 std::cout << "\tdrop!!" << std::endl;
             } else {
@@ -295,9 +310,10 @@ static int prediction_thread_main(void *arg) {
                           << "\t" << pa.latency_ms << "\t" << send_time_tsc << std::endl;
                 *SEND_TIME_FIELD(bufs[i]) = send_time_tsc;
                 nb_enq = rte_ring_sp_enqueue(ring_out, (void *)bufs[i]);
-                if (unlikely(nb_enq != 1)) {
+                if (unlikely(nb_enq != 0)) {
                     rte_pktmbuf_free(bufs[i]);
 		    std::cout << "WARNING: PREDICTION thread dropped packets because rte_ring is full!" << std::endl;
+		    std::cout << "number enqueued: " << nb_enq << std::endl;
                 }
             }
             last_packet_time_tsc = arrival_tsc;
@@ -322,26 +338,31 @@ static int tx_thread_main(void *arg) {
     struct rte_mbuf *bufs[BURST_SIZE];
     uint16_t nb_dq, nb_tx, i;
     uint64_t timestamp, send_time_tsc;
+    double wait_ms;
     
     uint32_t lcore_id = rte_lcore_id();
     std::cout << "Starting TX thread on lcore " << lcore_id << " for port " << port_id << std::endl;
     
     uint64_t now = rte_rdtsc();
     while (!force_quit) {
-        now = rte_rdtsc();
-        
         nb_dq = rte_ring_sc_dequeue_burst(ring, (void **)bufs, BURST_SIZE, NULL);
         if (nb_dq == 0) {
             continue;
         }
+
+	std::cout << "\tdrop rate: " << (packets_dropped/packets_total) << std::endl;
 
         // using BURST_SIZE>1, we have to loop over the possibly multiple mbufs.
         for (i = 0; i < nb_dq; i++) {
             timestamp = *TIMESTAMP_FIELD(bufs[i]);
             send_time_tsc = *SEND_TIME_FIELD(bufs[i]);
             // busy-wait until it is time to send this one.
+	    now = rte_rdtsc();
+
             if (now < send_time_tsc)
-                std::cout << "TX[" << port_id << "]:  waiting tsc: " << (send_time_tsc - now) << std::endl;
+	      wait_ms = 1000.0 * ((double)(send_time_tsc - now))/tsc_rate;
+                  std::cout << "TX[" << port_id << "]:  waiting tsc: " << (send_time_tsc - now)
+			    << "\tms: " << wait_ms << std::endl;
             while (now < send_time_tsc && !force_quit) {
                 //std::cout << "now < send_time_tsc\t" << now << "\t" << send_time_tsc << std::endl;
                 now = rte_rdtsc();

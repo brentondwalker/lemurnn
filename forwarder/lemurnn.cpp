@@ -77,7 +77,7 @@ LEmuRnn::PacketAction LEmuRnn::predict(double inter_packet_time_ms, double packe
     // build the input vector
     torch::Tensor x = torch::zeros({BATCH_SIZE, SEQ_LEN, INPUT_SIZE});
     auto xa = x.accessor<float, 3>();
-    xa[0][0][0] = inter_packet_time_ms;
+    xa[0][0][0] = inter_packet_time_ms * capacity_; // kbit processed
     xa[0][0][1] = packet_size_kbyte;
     xa[0][0][2] = capacity_;
     xa[0][0][3] = queue_size_;
