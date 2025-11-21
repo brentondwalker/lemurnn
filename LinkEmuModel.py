@@ -10,13 +10,14 @@ from torch.export import Dim
 
 class LinkEmuModel(nn.Module):
 
-    def __init__(self, input_size=4, hidden_size=2, num_layers=1, learning_rate=0.001, loadpath=None):
+    def __init__(self, input_size=4, hidden_size=2, num_layers=1, learning_rate=0.001, dropout_rate=0.0, loadpath=None):
         super(LinkEmuModel, self).__init__()
         #self.model_name = "none"
         self.input_size:int = input_size
         self.hidden_size:int = hidden_size
         self.num_layers:int = num_layers
         self.learning_rate:float = learning_rate
+        self.dropout_rate = dropout_rate
         if loadpath:
             print(f"loading model from {loadpath}")
             self.load_model_properties(loadpath)
@@ -36,6 +37,12 @@ class LinkEmuModel(nn.Module):
             if learning_rate:
                 print("WARNING: LinkEmuModel.set_optimizer(): optimizer was provided.  Ignoring learning_rate argument.")
         self.optimizer = optimizer
+
+    def get_model_param_string(self):
+        extra_stuff = ""
+        if self.dropout_rate > 0.0:
+            extra_stuff += f"_dr{self.dropout_rate}"
+        return f"l{self.num_layers}_h{self.hidden_size}{extra_stuff}"
 
     def new_instance(self):
         return self.__class__(self.input_size, self.hidden_size, self.num_layers, self.learning_rate)

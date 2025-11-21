@@ -29,10 +29,10 @@ class ReluLSTMCell(nn.Module):
 
 
 class DropReluLSTM(LinkEmuModel):
-    def __init__(self, input_size=4, hidden_size=2, num_layers=1, learning_rate=0.001, loadpath=None, dropout_rate=0):
+    def __init__(self, input_size=4, hidden_size=2, num_layers=1, learning_rate=0.001, loadpath=None, dropout_rate=0.0):
         self.model_name = "droprelulstm"
-        self.dropout_rate = dropout_rate
-        super(DropReluLSTM, self).__init__(input_size=input_size, hidden_size=hidden_size, num_layers=num_layers, learning_rate=learning_rate, loadpath=loadpath)
+        super(DropReluLSTM, self).__init__(input_size=input_size, hidden_size=hidden_size, num_layers=num_layers,
+                                           learning_rate=learning_rate, dropout_rate=dropout_rate, loadpath=loadpath)
         self.cell = ReluLSTMCell(input_size, hidden_size)
         if self.dropout_rate > 0:
             self.dropout = nn.Dropout(p=self.dropout_rate)

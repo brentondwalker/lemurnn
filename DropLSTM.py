@@ -7,8 +7,8 @@ class DropLSTM(LinkEmuModel):
     def __init__(self, input_size=4, hidden_size=2, num_layers=1, learning_rate=0.001, loadpath=None, dropout_rate=0.0):
         self.model_name = "droplstm"
         self.nonlinearity = 'tanh'
-        self.dropout_rate = dropout_rate
-        super(DropLSTM, self).__init__(input_size=input_size, hidden_size=hidden_size, num_layers=num_layers, learning_rate=learning_rate, loadpath=loadpath)
+        super(DropLSTM, self).__init__(input_size=input_size, hidden_size=hidden_size, num_layers=num_layers,
+                                       learning_rate=learning_rate, dropout_rate=dropout_rate, loadpath=loadpath)
         self.lstm = nn.LSTM(input_size=self.input_size, hidden_size=self.hidden_size, num_layers=self.num_layers, batch_first=True)
         if self.dropout_rate > 0:
             self.dropout = nn.Dropout(p=self.dropout_rate)
