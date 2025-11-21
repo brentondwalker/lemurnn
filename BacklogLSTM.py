@@ -5,7 +5,7 @@ from LinkEmuModel import LinkEmuModel
 
 class BacklogLSTM(LinkEmuModel):
 
-    def __init__(self, input_size=2, hidden_size=10, output_size=1, num_layers=1, learning_rate=0.001, loadpath=None, dropout_rate=0.0):
+    def __init__(self, input_size=2, hidden_size=10, output_size=1, num_layers=1, learning_rate=0.001, loadpath=None):
         super(BacklogLSTM, self).__init__(input_size=input_size, hidden_size=hidden_size, num_layers=num_layers, learning_rate=learning_rate, loadpath=loadpath)
         self.model_name = "backloglstm"
         self.lstm = nn.LSTM(input_size=input_size, hidden_size=hidden_size, num_layers=num_layers, batch_first=True)

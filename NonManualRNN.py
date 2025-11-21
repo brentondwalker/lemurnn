@@ -8,7 +8,8 @@ class NonManualRNN(LinkEmuModel):
         self.model_name = f"drop{nonlinearity}rnn"
         self.nonlinearity = nonlinearity
         self.dropout_rate = dropout_rate
-        super(NonManualRNN, self).__init__(input_size=input_size, hidden_size=hidden_size, num_layers=num_layers, learning_rate=learning_rate, loadpath=loadpath)
+        super(NonManualRNN, self).__init__(input_size=input_size, hidden_size=hidden_size, num_layers=num_layers,
+                                           learning_rate=learning_rate, dropout_rate=dropout_rate, loadpath=loadpath)
         # after calling super(), the internal data fields will be populated.
         # either from the arguments passed in, or from loading a saved state
         self.rnn = nn.RNN(input_size=self.input_size, hidden_size=self.hidden_size, num_layers=self.num_layers,
