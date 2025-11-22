@@ -152,6 +152,7 @@ class LinkEmuModel(nn.Module):
             model.load_state_dict(state_dict)
         else:
             model.load_state_dict(self.state_dict())
+        #XXX TODO: torch.jit.optimize_for_inference(torch.jit.script(mod.eval()))
         model.eval()
         dummy_x = torch.randn(BATCH_SIZE, SEQ_LEN, model.input_size)
         dummy_hidden = model.new_hidden_tensor(batch_size=BATCH_SIZE)
