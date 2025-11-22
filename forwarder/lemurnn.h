@@ -14,7 +14,7 @@ public:
      * @param device The torch::Device to run the model on (e.g., torch::kCPU or torch::kCUDA).
      */
     LEmuRnn(const std::string& model_path, int num_layers, int hidden_size,
-	        double capacity, double queue_size);
+	        double capacity, double queue_size, bool is_lstm=false);
 
     /**
      * Set/change the device of the model.
@@ -67,9 +67,16 @@ private:
     // the model hyperparams
     int num_layers_;
     int hidden_size_;
+    
+    // if this model is an LSTM, it needs a hidden and cell state
+    bool is_lstm_;
   
     // the hidden state tensor
     torch::Tensor hidden_;
+    torch::Tensor cell_state_;
+    
+    // the hidden state in the case of LSTM
+    std::tuple<torch::Tensor,torch::Tensor> lstm_hidden_;
 
     // capacity in units of [Kbit/ms]=[Mbit/s]
     double capacity_;

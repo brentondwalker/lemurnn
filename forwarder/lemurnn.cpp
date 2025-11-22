@@ -4,9 +4,9 @@
 #include <stdexcept>
 
 LEmuRnn::LEmuRnn(const std::string& model_path, int num_layers, int hidden_size,
-		 double capacity, double queue_size)
+		 double capacity, double queue_size, bool is_lstm)
   : device_(torch::kCPU), num_layers_(num_layers), hidden_size_(hidden_size),
-    capacity_(capacity), queue_size_(queue_size)
+    capacity_(capacity), queue_size_(queue_size), is_lstm_(is_lstm)
 {    
     try {
         module = torch::jit::load(model_path);
@@ -23,10 +23,19 @@ LEmuRnn::LEmuRnn(const std::string& model_path, int num_layers, int hidden_size,
     // the initial hidden state
     int BATCH_SIZE = 1;
     hidden_ = torch::zeros({num_layers_, BATCH_SIZE, hidden_size_}).to(device_);
+    if (is_lstm_) {
+        cell_state_ = torch::zeros({num_layers_, BATCH_SIZE, hidden_size_}).to(device_);
+        lstm_hidden_ = std::make_tuple(hidden_, cell_state_);
+    }
 }
 
 void LEmuRnn::resetHiddenState() {
-    hidden_.zero_();
+    if (is_lstm_) {
+        std::get<0>(lstm_hidden_).zero_();
+        std::get<1>(lstm_hidden_).zero_();
+    } else {
+        hidden_.zero_();
+    }
 }
 
 void LEmuRnn::useGPU() {
@@ -85,12 +94,24 @@ LEmuRnn::PacketAction LEmuRnn::predict(double inter_packet_time_ms, double packe
     // prepare inputs
     std::vector<torch::jit::IValue> inputs;
     inputs.push_back(x.to(device_));
-    inputs.push_back(hidden_);
+    if (is_lstm_) {
+        inputs.push_back(lstm_hidden_);
+    } else {
+        inputs.push_back(hidden_);
+    }
 
+    //XXX TODO: just keep the hidden state as an ivalue, without all the un/packing.
     auto output_tuple = module.forward(inputs).toTuple();
     torch::Tensor backlog_tensor = output_tuple->elements()[0].toTensor();
     torch::Tensor drop_tensor = output_tuple->elements()[1].toTensor();
-    hidden_ = output_tuple->elements()[2].toTensor();
+    if (is_lstm_) {
+        auto hidden_tuple_ptr = output_tuple->elements()[2].toTuple();
+        hidden_ = hidden_tuple_ptr->elements()[0].toTensor();
+        cell_state_ = hidden_tuple_ptr->elements()[1].toTensor();
+        lstm_hidden_ = std::make_tuple(hidden_, cell_state_);
+    } else {
+        hidden_ = output_tuple->elements()[2].toTensor();
+    }
 
     // The raw output of the model is trained to be like a queue backlog.
     // Divide by capacity to get the corresponding latency.
