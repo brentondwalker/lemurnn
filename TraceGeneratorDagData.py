@@ -86,7 +86,9 @@ class TraceGeneratorDagData(TraceGenerator):
         if self.sample_index >= len(self.sample_files):
             self.sample_sequence = np.random.permutation(len(self.sample_files))
             self.sample_index = 0
-            print(f"WARNING: TraceGeneratorDagData: not enough samples!  Recycling the pool.")
+            # if we are just loading a single sample file, we don't want to se the warning.
+            if len(self.sample_files) > 1:
+                print(f"WARNING: TraceGeneratorDagData: not enough samples!  Recycling the pool.")
 
 
     def generate_trace_sample(self, seq_length:int):
@@ -104,10 +106,11 @@ class TraceGeneratorDagData(TraceGenerator):
             with open(f"{sample_filename}", 'r', newline='') as csvfile:
                 num_rows = sum(1 for row in csvfile)
             self.increment_sample_index()
-            if first_sample_index == self.sample_index:
-                # if this happens, then it will be on the first run, starting from 0
-                print(f"ERROR: no files in the list are as long as {seq_length}")
-                sys.exit(0)
+            if num_rows-1 < seq_length:
+                if first_sample_index == self.sample_index:
+                    # if this happens, then it will be on the first run, starting from 0
+                    print(f"ERROR: no files in the list are as long as {seq_length}")
+                    sys.exit(0)
 
 
         c_val, l_val, q_val = self.parse_filename(sample_filename)
