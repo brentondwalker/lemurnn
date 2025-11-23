@@ -76,15 +76,24 @@ class TraceGeneratorDagData(TraceGenerator):
             return None, None, None
 
 
+    def increment_sample_index(self):
+        """
+        If we cycled through all the sample files and self.sample_index gets to the end,
+        we re-permute the samples and start recycling them.
+        Not ideal, but useful for experimenting.
+        """
+        self.sample_index += 1
+        if self.sample_index >= len(self.sample_files):
+            self.sample_sequence = np.random.permutation(len(self.sample_files))
+            self.sample_index = 0
+            print(f"WARNING: TraceGeneratorDagData: not enough samples!  Recycling the pool.")
+
+
     def generate_trace_sample(self, seq_length:int):
         """
         As a sort of normalization, we try to express everything in KByte and KByte/ms.
         This should keep input and output values from getting to ridiculous.
         """
-        if self.sample_index >= len(self.sample_files):
-            self.sample_sequence = np.random.permutation(len(self.sample_files))
-            self.sample_index = 0
-            print(f"WARNING: TraceGeneratorDagData: not enough samples!  Recycling the pool.")
 
         # randomly take the next sample file
         # the next one that has at least seq_length data points
@@ -94,10 +103,12 @@ class TraceGeneratorDagData(TraceGenerator):
             sample_filename = self.sample_files[self.sample_sequence[self.sample_index]]
             with open(f"{sample_filename}", 'r', newline='') as csvfile:
                 num_rows = sum(1 for row in csvfile)
-            self.sample_index += 1
             if first_sample_index == self.sample_index:
+                # if this happens, then it will be on the first run, starting from 0
                 print(f"ERROR: no files in the list are as long as {seq_length}")
                 sys.exit(0)
+            self.increment_sample_index()
+
 
         c_val, l_val, q_val = self.parse_filename(sample_filename)
         # the CAP value is Mbit/s = Kbit/ms.  No need to convert.
