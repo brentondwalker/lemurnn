@@ -103,11 +103,11 @@ class TraceGeneratorDagData(TraceGenerator):
             sample_filename = self.sample_files[self.sample_sequence[self.sample_index]]
             with open(f"{sample_filename}", 'r', newline='') as csvfile:
                 num_rows = sum(1 for row in csvfile)
+            self.increment_sample_index()
             if first_sample_index == self.sample_index:
                 # if this happens, then it will be on the first run, starting from 0
                 print(f"ERROR: no files in the list are as long as {seq_length}")
                 sys.exit(0)
-            self.increment_sample_index()
 
 
         c_val, l_val, q_val = self.parse_filename(sample_filename)
