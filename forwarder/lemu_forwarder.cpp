@@ -21,6 +21,7 @@
 #include <stdexcept>
 #include <csignal>
 #include <cstdint>
+#include <fstream>
 
 #include <rte_eal.h>
 #include <rte_ethdev.h>
@@ -64,6 +65,8 @@ static std::string model_file;
 static double capacity = 1.0;      // units of [Kbit/ms]=[Mbit/s]
 static double queue_size = 5.0; // units of [KByte]
 
+// keep track of some packet stats
+uint32_t packet_count = 0;
 double packets_total = 0.0;
 double packets_dropped = 0.0;
 
@@ -179,6 +182,8 @@ struct rx_lcore_params {
 struct prediction_lcore_params {
     struct rte_ring *ring_in;
     struct rte_ring *ring_out;
+    std::string data_save_filename;
+    uint16_t rx_port;
 };
 
 struct tx_lcore_params {
@@ -243,6 +248,8 @@ static int prediction_thread_main(void *arg) {
     struct prediction_lcore_params *params = (struct prediction_lcore_params *)arg;
     struct rte_ring *ring_in = params->ring_in;
     struct rte_ring *ring_out = params->ring_out;
+    uint16_t rx_port = params->rx_port;
+    std::string data_save_filename = params->data_save_filename;
     struct rte_mbuf *bufs[BURST_SIZE];
     uint16_t nb_dq, nb_enq, i;
     uint64_t prediction_timer = 0;
@@ -251,16 +258,19 @@ static int prediction_thread_main(void *arg) {
     uint32_t lcore_id = rte_lcore_id();
     std::cout << "Starting PREDICTION thread on lcore " << lcore_id << std::endl;
 
-    // initialize a LEmuRnn model for this thread
-    // XXX this should be a cmd-line arg, and the hidden size and num layers should be too
-    //     Or they should be saved along with the model.
-    //const std::string MODEL_PATH = "/users/brenton/lemu-forwarder/modelstate-torchscript-1684-droprelurnn-l4_h64-bscq_bd.pt";
     const std::string MODEL_PATH = "/users/brenton/lemurnn/forwarder/modelstate-torchscript-442-droprelurnn-l4_h64-bscq_bd-midlight.pt";
-    //const int HIDDEN_SIZE = 64;
-    //const int NUM_LAYERS = 4;
-    //const double CAPACITY = 5;
-    //const double QUEUE_SIZE = 10;
     LEmuRnn model(model_file, num_layers, hidden_size, capacity, queue_size);
+    
+    // file to write info about packet arrivals and actions
+    std::ofstream data_save_file;
+    if (data_save_filename != NULL) {
+        data_save_filename += std::to_string(rx_port) + ".dat"
+        data_save_file.open(filename, std::ios::out | std::ios::trunc);
+        if (!outFile.is_open()) {
+            std::cerr << "Error: Could not open file " << filename << " for writing." << std::endl;
+            return 1;
+        }
+    }
     
     // need to keep track of the arrival time of the last packet
     uint64_t last_packet_time_tsc = 0;
@@ -316,6 +326,12 @@ static int prediction_thread_main(void *arg) {
 		    std::cout << "number enqueued: " << nb_enq << std::endl;
                 }
             }
+            // at this point we have all the available info except what time the 
+            // packet actually gets sent.
+            if (data_save_file.is_open()) {
+                data_save_file << 
+            }
+            
             last_packet_time_tsc = arrival_tsc;
         }
     }
@@ -396,7 +412,7 @@ static void print_usage(char *program_name) {
 int parse_options(int argc, char *argv[]) {
 
     int opt;
-    while ((opt = getopt(argc, argv, "h:l:m:c:q:t:")) != -1) {
+    while ((opt = getopt(argc, argv, "h:l:m:c:q:t:f:")) != -1) {
         switch (opt) {
         case 'h':
             try {
@@ -437,6 +453,9 @@ int parse_options(int argc, char *argv[]) {
         case 't':
             model_type = optarg;
             break;
+        case 'f':
+            data_save_filename = optarg;
+            break;
         default:
             print_usage(argv[0]);
             return 1;
@@ -457,6 +476,7 @@ int parse_options(int argc, char *argv[]) {
     std::cout << "Capacity:    " << capacity << "\n";
     std::cout << "Queue size:  " << queue_size << "\n";
     std::cout << "Model type:  " << model_type << "\n";
+    std::cout << "Data save file:  " << data_save_filename << "\n";
 
     return 0;
 }
@@ -489,8 +509,8 @@ int main(int argc, char *argv[]) {
     try {
         port_a = (uint16_t)std::stoul(argv[1]);
         port_b = (uint16_t)std::stoul(argv[2]);
-	argc -= 2;
-	argv += 2;
+        argc -= 2;
+        argv += 2;
     } catch (const std::exception &e) {
         rte_exit(EXIT_FAILURE, "Invalid port ID argument: %s\n", e.what());
     }
@@ -500,7 +520,7 @@ int main(int argc, char *argv[]) {
         std::cerr << "ERROR: command line parsing error." << std::endl;
         return 1;
     }
-
+    
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
 
@@ -578,12 +598,12 @@ int main(int argc, char *argv[]) {
 
     // flow: A -> B
     rx_params_ab = {port_a, ring_rx_to_prediction_ab};
-    prediction_params_ab = {ring_rx_to_prediction_ab, ring_prediction_to_tx_ab};
+    prediction_params_ab = {ring_rx_to_prediction_ab, ring_prediction_to_tx_abm, data_save_filename, port_a};
     tx_params_ab = {port_b, ring_prediction_to_tx_ab};
 
     // flow: B -> A
     rx_params_ba = {port_b, ring_rx_to_prediction_ba};
-    prediction_params_ba = {ring_rx_to_prediction_ba, ring_prediction_to_tx_ba};
+    prediction_params_ba = {ring_rx_to_prediction_ba, ring_prediction_to_tx_ba, data_save_filename, port_b};
     tx_params_ba = {port_a, ring_prediction_to_tx_ba};
 
     std::cout << "Main lcore " << rte_lcore_id() << " launching threads..." << std::endl;
