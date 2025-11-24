@@ -258,8 +258,12 @@ static int prediction_thread_main(void *arg) {
     uint32_t lcore_id = rte_lcore_id();
     std::cout << "Starting PREDICTION thread on lcore " << lcore_id << std::endl;
 
-    const std::string MODEL_PATH = "/users/brenton/lemurnn/forwarder/modelstate-torchscript-442-droprelurnn-l4_h64-bscq_bd-midlight.pt";
-    LEmuRnn model(model_file, num_layers, hidden_size, capacity, queue_size);
+    // initialize a LEmuRnn model for this thread
+    
+    if (model_type == "lstm" || model_type == "LSTM") {
+        is_lstm = true;
+    }
+    LEmuRnn model(model_file, num_layers, hidden_size, capacity, queue_size, is_lstm);
     
     // file to write info about packet arrivals and actions
     std::ofstream data_save_file;
@@ -271,7 +275,6 @@ static int prediction_thread_main(void *arg) {
             return 1;
         }
     }
-    
     // need to keep track of the arrival time of the last packet
     uint64_t last_packet_time_tsc = 0;
 
@@ -375,10 +378,13 @@ static int tx_thread_main(void *arg) {
             // busy-wait until it is time to send this one.
 	    now = rte_rdtsc();
 
-            if (now < send_time_tsc)
-	      wait_ms = 1000.0 * ((double)(send_time_tsc - now))/tsc_rate;
-                  std::cout << "TX[" << port_id << "]:  waiting tsc: " << (send_time_tsc - now)
-			    << "\tms: " << wait_ms << std::endl;
+            if (now < send_time_tsc) {
+                wait_ms = 1000.0 * ((double)(send_time_tsc - now))/tsc_rate;
+		std::cout << "TX[" << port_id << "]:  waiting tsc: " << (send_time_tsc - now)
+			  << "\tms: " << wait_ms << std::endl;
+		//std::cout << "\t\tnow:" << now << "\tsend_time: " << send_time_tsc << std::endl;
+		//std::cout << "\t\tnow:" << now << "\tsend_time: " << send_time_tsc << std::endl;
+	    }
             while (now < send_time_tsc && !force_quit) {
                 //std::cout << "now < send_time_tsc\t" << now << "\t" << send_time_tsc << std::endl;
                 now = rte_rdtsc();
