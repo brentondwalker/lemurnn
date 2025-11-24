@@ -64,6 +64,7 @@ static std::string model_type = "rnn";
 static std::string model_file;
 static double capacity = 1.0;      // units of [Kbit/ms]=[Mbit/s]
 static double queue_size = 5.0; // units of [KByte]
+std::string data_save_filename_base;
 
 // keep track of some packet stats
 uint32_t packet_count = 0;
@@ -254,7 +255,8 @@ static int prediction_thread_main(void *arg) {
     uint16_t nb_dq, nb_enq, i;
     uint64_t prediction_timer = 0;
     double prediction_time_ms = 0.0;
-    
+    bool is_lstm = false;
+
     uint32_t lcore_id = rte_lcore_id();
     std::cout << "Starting PREDICTION thread on lcore " << lcore_id << std::endl;
 
@@ -267,21 +269,25 @@ static int prediction_thread_main(void *arg) {
     
     // file to write info about packet arrivals and actions
     std::ofstream data_save_file;
-    if (data_save_filename != NULL) {
-        data_save_filename += std::to_string(rx_port) + ".dat"
-        data_save_file.open(filename, std::ios::out | std::ios::trunc);
-        if (!outFile.is_open()) {
-            std::cerr << "Error: Could not open file " << filename << " for writing." << std::endl;
+    if (!data_save_filename.empty()) {
+        data_save_filename += std::to_string(rx_port) + ".dat";
+        data_save_file.open(data_save_filename, std::ios::out | std::ios::trunc);
+        if (!data_save_file.is_open()) {
+            std::cerr << "Error: Could not open file " << data_save_filename << " for writing." << std::endl;
             return 1;
         }
     }
     // need to keep track of the arrival time of the last packet
     uint64_t last_packet_time_tsc = 0;
+    
+    // keep track of packet count
+    uint32_t packet_count = 0;
+    uint32_t num_drops = 0;
 
     while (!force_quit) {
         nb_dq = rte_ring_sc_dequeue_burst(ring_in, (void **)bufs, BURST_SIZE, NULL);
         if (nb_dq == 0) continue;
-	std::cout << "PREDICTION thread dequeued: " << nb_dq << std::endl;
+        std::cout << "PREDICTION thread dequeued: " << nb_dq << std::endl;
 
         for (i = 0; i < nb_dq; i++) {
             uint64_t arrival_tsc = *TIMESTAMP_FIELD(bufs[i]);
@@ -289,7 +295,8 @@ static int prediction_thread_main(void *arg) {
             double size_kbyte = ((double)size_byte)/1000.0;
             uint64_t inter_packet_time_tsc = arrival_tsc - last_packet_time_tsc;
             double inter_packet_time_ms = 1000.0*((double)inter_packet_time_tsc)/tsc_rate;
-	    //double processed_kbit = inter_packet_time_ms * capacity;
+            double processed_kbit = inter_packet_time_ms * capacity;
+            uint64_t send_time_tsc = 0;
 
             // When the program first starts, or if the link has been idle for awhile, 
             // the inter-packet time will be way outside the range the model has been
@@ -305,19 +312,20 @@ static int prediction_thread_main(void *arg) {
             //     << "\t" << size_kbyte << std::endl;
             //LEmuRnn::PacketAction pa = {1.5, true};
 
-	    prediction_timer = rte_rdtsc();
+            prediction_timer = rte_rdtsc();
             LEmuRnn::PacketAction pa = model.predict(inter_packet_time_ms, size_kbyte);
-	    prediction_time_ms = 1000.0*(((double)(rte_rdtsc() - prediction_timer))/tsc_rate);
-	    std::cout << "\tprediction took ms: " << prediction_time_ms << std::endl;
-	    packets_total += 1;
+            prediction_time_ms = 1000.0*(((double)(rte_rdtsc() - prediction_timer))/tsc_rate);
+            std::cout << "\tprediction took ms: " << prediction_time_ms << std::endl;
+            packets_total += 1;
             if (pa.drop) {
                 packets_dropped += 1;
+                num_drops++;  // local version.  Should entfern the other one.
                 rte_pktmbuf_free(bufs[i]);
                 std::cout << "\tdrop!!" << std::endl;
             } else {
                 std::cout << "\tPacket Action: " << pa.latency_ms
                           << "\t" << pa.drop << std::endl;
-                uint64_t send_time_tsc = arrival_tsc + (uint64_t)(pa.latency_ms * tsc_rate / 1000.0);
+                send_time_tsc = arrival_tsc + (uint64_t)(pa.latency_ms * tsc_rate / 1000.0);
                 //uint64_t send_time_tsc = arrival_tsc + (uint64_t)(pa.latency_ms * 1.0);
                 std::cout << arrival_tsc << "\t" << inter_packet_time_tsc  << "\t" << inter_packet_time_ms
                           << "\t" << pa.latency_ms << "\t" << send_time_tsc << std::endl;
@@ -325,18 +333,37 @@ static int prediction_thread_main(void *arg) {
                 nb_enq = rte_ring_sp_enqueue(ring_out, (void *)bufs[i]);
                 if (unlikely(nb_enq != 0)) {
                     rte_pktmbuf_free(bufs[i]);
-		    std::cout << "WARNING: PREDICTION thread dropped packets because rte_ring is full!" << std::endl;
-		    std::cout << "number enqueued: " << nb_enq << std::endl;
+    	            std::cout << "WARNING: PREDICTION thread dropped packets because rte_ring is full!"
+    	                      << std::endl;
+    	            std::cout << "number enqueued: " << nb_enq << std::endl;
                 }
             }
             // at this point we have all the available info except what time the 
             // packet actually gets sent.
+            // Doing this in the prediction thread wastes even more time.
+            // But it's not much compared to the prediction itself, and all out couts.
             if (data_save_file.is_open()) {
-                data_save_file << 
+                data_save_file << packet_count << "\t"
+                               << inter_packet_time_ms << "\t"
+                               << processed_kbit << "\t"
+                               << size_byte << "\t"
+                               << pa.latency_ms << "\t"
+                               << pa.drop << "\t"
+                               << prediction_time_ms << "\t"
+                               << num_drops << "\t"
+                               << arrival_tsc << "\t"
+                               << inter_packet_time_tsc << "\t"
+                               << size_kbyte << "\t"
+                               << send_time_tsc << std::endl;
             }
+            packet_count++;
             
             last_packet_time_tsc = arrival_tsc;
         }
+    }
+    
+    if (data_save_file.is_open()) {
+        data_save_file.close();
     }
 
     std::cout << "Exiting PREDICTION thread on lcore " << lcore_id << std::endl;
@@ -460,7 +487,7 @@ int parse_options(int argc, char *argv[]) {
             model_type = optarg;
             break;
         case 'f':
-            data_save_filename = optarg;
+            data_save_filename_base = optarg;
             break;
         default:
             print_usage(argv[0]);
@@ -471,7 +498,7 @@ int parse_options(int argc, char *argv[]) {
     // Validation check
     if (hidden_size == 0 || num_layers == 0 || model_file.empty()) {
         std::cerr << "Error: Missing required arguments.\n";
-	print_usage(argv[0]);
+        print_usage(argv[0]);
         return 1;
     }
 
@@ -482,7 +509,7 @@ int parse_options(int argc, char *argv[]) {
     std::cout << "Capacity:    " << capacity << "\n";
     std::cout << "Queue size:  " << queue_size << "\n";
     std::cout << "Model type:  " << model_type << "\n";
-    std::cout << "Data save file:  " << data_save_filename << "\n";
+    std::cout << "Data save file:  " << data_save_filename_base << "\n";
 
     return 0;
 }
@@ -604,12 +631,12 @@ int main(int argc, char *argv[]) {
 
     // flow: A -> B
     rx_params_ab = {port_a, ring_rx_to_prediction_ab};
-    prediction_params_ab = {ring_rx_to_prediction_ab, ring_prediction_to_tx_abm, data_save_filename, port_a};
+    prediction_params_ab = {ring_rx_to_prediction_ab, ring_prediction_to_tx_ab, data_save_filename_base, port_a};
     tx_params_ab = {port_b, ring_prediction_to_tx_ab};
 
     // flow: B -> A
     rx_params_ba = {port_b, ring_rx_to_prediction_ba};
-    prediction_params_ba = {ring_rx_to_prediction_ba, ring_prediction_to_tx_ba, data_save_filename, port_b};
+    prediction_params_ba = {ring_rx_to_prediction_ba, ring_prediction_to_tx_ba, data_save_filename_base, port_b};
     tx_params_ba = {port_a, ring_prediction_to_tx_ba};
 
     std::cout << "Main lcore " << rte_lcore_id() << " launching threads..." << std::endl;
