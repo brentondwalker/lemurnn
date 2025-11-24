@@ -70,7 +70,7 @@ std::string data_save_filename_base;
 uint32_t packet_count = 0;
 double packets_total = 0.0;
 double packets_dropped = 0.0;
-
+double start_time_ms = 0.0;
 
 // Helper macro to get the timestamp pointer from an mbuf
 #define TIMESTAMP_FIELD(mbuf) \
@@ -279,6 +279,12 @@ static int prediction_thread_main(void *arg) {
     }
     // need to keep track of the arrival time of the last packet
     uint64_t last_packet_time_tsc = 0;
+    uint64_t start_time_tsc = rte_rdtsc();
+    
+    // this is shared between the threads
+    // one will overwrite the other, and it doesn't matter.
+    // Just need a common reference point.
+    start_time_ms = 1000.0*((double)start_time_tsc)/tsc_rate;
     
     // keep track of packet count
     uint32_t packet_count = 0;
@@ -295,7 +301,7 @@ static int prediction_thread_main(void *arg) {
             double size_kbyte = ((double)size_byte)/1000.0;
             uint64_t inter_packet_time_tsc = arrival_tsc - last_packet_time_tsc;
             double inter_packet_time_ms = 1000.0*((double)inter_packet_time_tsc)/tsc_rate;
-            double processed_kbit = inter_packet_time_ms * capacity;
+            double arrival_ms = 1000.0*((double)(arrival_tsc-start_time_tsc))/tsc_rate;
             uint64_t send_time_tsc = 0;
 
             // When the program first starts, or if the link has been idle for awhile, 
@@ -308,6 +314,8 @@ static int prediction_thread_main(void *arg) {
                 inter_packet_time_ms = 0.0;
                 //XXX should we also reset the model hidden state?
             }
+            double processed_kbit = inter_packet_time_ms * capacity;
+
             //std::cout << "packet prediction: " << inter_packet_time_ms
             //     << "\t" << size_kbyte << std::endl;
             //LEmuRnn::PacketAction pa = {1.5, true};
@@ -352,6 +360,7 @@ static int prediction_thread_main(void *arg) {
                                << prediction_time_ms << "\t"
                                << num_drops << "\t"
                                << arrival_tsc << "\t"
+                               << arrival_ms << "\t"
                                << inter_packet_time_tsc << "\t"
                                << size_kbyte << "\t"
                                << send_time_tsc << std::endl;
