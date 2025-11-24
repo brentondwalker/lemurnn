@@ -247,20 +247,17 @@ static int prediction_thread_main(void *arg) {
     uint16_t nb_dq, nb_enq, i;
     uint64_t prediction_timer = 0;
     double prediction_time_ms = 0.0;
+    bool is_lstm = false;
     
     uint32_t lcore_id = rte_lcore_id();
     std::cout << "Starting PREDICTION thread on lcore " << lcore_id << std::endl;
 
     // initialize a LEmuRnn model for this thread
-    // XXX this should be a cmd-line arg, and the hidden size and num layers should be too
-    //     Or they should be saved along with the model.
-    //const std::string MODEL_PATH = "/users/brenton/lemu-forwarder/modelstate-torchscript-1684-droprelurnn-l4_h64-bscq_bd.pt";
-    const std::string MODEL_PATH = "/users/brenton/lemurnn/forwarder/modelstate-torchscript-442-droprelurnn-l4_h64-bscq_bd-midlight.pt";
-    //const int HIDDEN_SIZE = 64;
-    //const int NUM_LAYERS = 4;
-    //const double CAPACITY = 5;
-    //const double QUEUE_SIZE = 10;
-    LEmuRnn model(model_file, num_layers, hidden_size, capacity, queue_size);
+    
+    if (model_type == "lstm" || model_type == "LSTM") {
+        is_lstm = true;
+    }
+    LEmuRnn model(model_file, num_layers, hidden_size, capacity, queue_size, is_lstm);
     
     // need to keep track of the arrival time of the last packet
     uint64_t last_packet_time_tsc = 0;
@@ -359,10 +356,13 @@ static int tx_thread_main(void *arg) {
             // busy-wait until it is time to send this one.
 	    now = rte_rdtsc();
 
-            if (now < send_time_tsc)
-	      wait_ms = 1000.0 * ((double)(send_time_tsc - now))/tsc_rate;
-                  std::cout << "TX[" << port_id << "]:  waiting tsc: " << (send_time_tsc - now)
-			    << "\tms: " << wait_ms << std::endl;
+            if (now < send_time_tsc) {
+                wait_ms = 1000.0 * ((double)(send_time_tsc - now))/tsc_rate;
+		std::cout << "TX[" << port_id << "]:  waiting tsc: " << (send_time_tsc - now)
+			  << "\tms: " << wait_ms << std::endl;
+		//std::cout << "\t\tnow:" << now << "\tsend_time: " << send_time_tsc << std::endl;
+		//std::cout << "\t\tnow:" << now << "\tsend_time: " << send_time_tsc << std::endl;
+	    }
             while (now < send_time_tsc && !force_quit) {
                 //std::cout << "now < send_time_tsc\t" << now << "\t" << send_time_tsc << std::endl;
                 now = rte_rdtsc();
@@ -396,7 +396,7 @@ static void print_usage(char *program_name) {
 int parse_options(int argc, char *argv[]) {
 
     int opt;
-    while ((opt = getopt(argc, argv, "h:l:m:c:q:t:")) != -1) {
+    while ((opt = getopt(argc, argv, "h:l:m:c:q:t:s")) != -1) {
         switch (opt) {
         case 'h':
             try {
