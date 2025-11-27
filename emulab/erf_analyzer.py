@@ -113,6 +113,8 @@ def analyze_packet_trace(trace_data, tx_interface, rx_interface):
     # of more than 4s, we dump the current results and reinitialize the data structures.
     last_tx_time = 0.0
 
+    packet_count = 0
+    
     # 1. First Pass: Separate and record TX and RX events
     for event in trace_data:
         interface = event['interface']
@@ -124,7 +126,9 @@ def analyze_packet_trace(trace_data, tx_interface, rx_interface):
 
         # check if this is the start of the next experiment
         if interface == tx_interface:
+            packet_count += 1
             if (timestamp - last_tx_time) > 4.0:
+                print(f"**** detected a gap at packet: {packet_count}")
                 latency_results = compute_latencies(tx_packets, rx_packets)
                 print_results(latency_results)
                 experiment_traces.append(latency_results)
@@ -163,19 +167,19 @@ def print_results(records):
     """Prints the final analysis table."""
     print("\n--- FINAL A->B->C ANALYSIS REPORT ---")
     print("-" * 75)
-    print(
-        f"{'#':<4} | {'Size (B)':<8} | {'TX Time (I1)':<15} | {'RX Time (I2)':<15} | {'Latency (s)':<11} | {'Dropped':<7}")
-    print("-" * 75)
+    #print(
+    #    f"{'#':<4} | {'Size (B)':<8} | {'TX Time (I1)':<15} | {'RX Time (I2)':<15} | {'Latency (s)':<11} | {'Dropped':<7}")
+    #print("-" * 75)
+    #
+    #for r in records:
+    #    rx_time_str = f"{r.receive_time:.6f}" if r.receive_time > 0 else "N/A"
+    #    latency_str = f"{r.latency:.6f}" if r.latency > 0 else "N/A"
+    #    dropped_str = "YES" if r.dropped_status == 1 else "NO"
 
-    for r in records:
-        rx_time_str = f"{r.receive_time:.6f}" if r.receive_time > 0 else "N/A"
-        latency_str = f"{r.latency:.6f}" if r.latency > 0 else "N/A"
-        dropped_str = "YES" if r.dropped_status == 1 else "NO"
-
-        print(
-            f"{r.packet_number:<4} | {r.size:<8} | {r.transmit_time:.6f} | {rx_time_str:<15} | {latency_str:<11} | {dropped_str:<7}"
-        )
-    print("-" * 75)
+    #    print(
+    #        f"{r.packet_number:<4} | {r.size:<8} | {r.transmit_time:.6f} | {rx_time_str:<15} | {latency_str:<11} | {dropped_str:<7}"
+    #    )
+    #print("-" * 75)
     print(f"Total packets analyzed: {len(records)}")
     dropped_count = sum(r.dropped_status for r in records)
     print(f"Total packets dropped (A->B): {dropped_count}")
