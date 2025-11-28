@@ -216,3 +216,11 @@ If you give the forwarder the `-f <filename>` argument, it will save off info ab
 1. size_kbyte
 1. send_time_tsc
 
+Running iperf with Reno over an example model and plotting predicted latency and drops vs packet number.
+```
+gnuplot
+plot [0:500] 'testfile1-rnn740-reno.dat' using 1:5 w lp
+replot 'testfile1-rnn740-reno.dat' using 1:($6*10) w lp
+```
+<img width="630" height="476" alt="image" src="https://github.com/user-attachments/assets/43a2077b-adaf-43b4-8c5d-3d3000f6f50f" />
+
