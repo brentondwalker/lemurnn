@@ -59,7 +59,7 @@ def connect_ssh(host_cfg: dict, port: int = 22) -> paramiko.SSHClient:
         if not os.path.exists(pkey_path):
             raise FileNotFoundError(f"Private key not found: {pkey_path}")
         pkey_obj = paramiko.RSAKey.from_private_key_file(pkey_path)
-        # 👇 Force old-style ssh-rsa signing (critical for Ubuntu14)
+        # Force old-style ssh-rsa signing (critical for Ubuntu14)
         if hasattr(pkey_obj, "use_ssh_rsa_signing"):
             pkey_obj.use_ssh_rsa_signing(True)
 

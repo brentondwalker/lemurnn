@@ -1,0 +1,17 @@
+{
+    'min_pkt_size': 60,
+    'max_pkt_size': 1400,
+    'min_capacity': 1,
+    'max_capacity': 10,
+    'capacity_increment': 1,
+    'min_queue': 5,
+    'max_queue': 100,
+    'queue_increment': 10,
+    'min_latency': 0,
+    'max_latency': 0,
+    'min_rate': 0.005,
+    'max_rate':0.1,
+    'iterations': 32,
+    'packet_seq_length': 1024,
+    'link_type': 'bytequeue',
+}
