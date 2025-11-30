@@ -492,8 +492,14 @@ def main():
                     # compute the desired mean pkt rate based on the other params
                     # (b/s) / ((B/pkt) * (b/B)) = (pkt/s)
                     #pkt_rate = RATE *1000000 / (8*(max_pkt_size + min_pkt_size)/2)
+
+                    # itgsend is not so smart sometimes
+                    if experiment_spec['min_pkt_size'] == experiment_spec['max_pkt_size']:
+                        pkt_size_option = f"-c {experiment_spec['max_pkt_size']}"
+                    else:
+                        pkt_size_option = f"-u {experiment_spec['min_pkt_size']} {experiment_spec['max_pkt_size']}"
                     itgsend_cmd = (
-                        f"ITGSend -a {emulab_spec['node3_ip']} -T UDP -z {experiment_spec['packet_seq_length']} -E {RATE_pps} -u {experiment_spec['min_pkt_size']} {experiment_spec['max_pkt_size']} -l {tx_log} -x {rx_log} -Sda {emulab_spec['node3_cnet_ip']}"
+                        f"ITGSend -a {emulab_spec['node3_ip']} -T UDP -z {experiment_spec['packet_seq_length']} -E {RATE_pps}  {pkt_size_option} -l {tx_log} -x {rx_log} -Sda {emulab_spec['node3_cnet_ip']}"
                         #f"ITGSend -a pc33 -T UDP -z 1024 -E {pkt_rate} -u {min_pkt_size} {max_pkt_size} -l {tx_log} -x {rx_log}"
                     )
 
