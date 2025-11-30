@@ -1,20 +1,10 @@
 #!/usr/bin/env python3
 
 import argparse
-import sys
-
-from DropLSTM import DropLSTM
-from DropReluLSTM import DropReluLSTM
-from LinkEmuModel import LinkEmuModel
 from LinkProperties import link_properties_library
-from NonManualRNN import NonManualRNN
-from TraceGenerator import *
-from TraceGeneratorCodel import TraceGeneratorCodel
 from LatencyPredictor import *
-from LatencyPredictorEarthmover import LatencyPredictorEarthmover
-from LatencyPredictorEnergy import LatencyPredictorEnergy
 from TraceGeneratorDagData import TraceGeneratorDagData
-from TraceGeneratorPacketQueue import TraceGeneratorPacketQueue
+from TraceGenerator import TraceGenerator
 
 """
 Run a model on a single trace file and plot the prediction vs the truth.
@@ -27,19 +17,11 @@ def main():
     parser.add_argument("-m", '--model', type=str, default=None)
     parser.add_argument("-l", '--num_layers', type=int, default=1)
     parser.add_argument("-s", '--hidden_size', type=int, default=8)
-    parser.add_argument("-e", '--num_epochs', type=int, default=100)
     parser.add_argument('--seq_len', type=int, default=128)
     parser.add_argument('--dag_data', type=str, action='append', default=None)
-    parser.add_argument('--codel', action='store_true')
     parser.add_argument('--packetqueue', action='store_true')
-    parser.add_argument('--energy', action='store_true')
-    parser.add_argument('--earthmover', action='store_true')
-    parser.add_argument('--tanh', action='store_true')
-    parser.add_argument('--relu_lstm', action='store_true')
     parser.add_argument('--lstm', action='store_true')
     parser.add_argument('--normalize', action='store_true')
-    parser.add_argument('--multiloader', action='store_true')
-    parser.add_argument('--drop_masking', action='store_true')
 
     args = parser.parse_args()
 

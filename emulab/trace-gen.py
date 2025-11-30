@@ -17,7 +17,8 @@ Notes:
  - Adjust ITGSend options inside the loop if you need different IDT/packet-size semantics.
  - The script captures PIDs for backgrounded processes and kills them at the end.
 """
-
+import argparse
+import json
 import random
 import time
 from pathlib import Path
@@ -30,37 +31,6 @@ import paramiko
 import sys
 from typing import Optional, Tuple
 
-# ========== CONFIG ==========
-HOSTS = {
-    "node1": {"host": "pc33", "username": "brenton", "password": None, "pkey": "/home/brenton/.ssh/id_rsa", "legacy": False},
-    "node2": {"host": "pc93", "username": "brenton", "password": None, "pkey": "/home/brenton/.ssh/id_rsa", "legacy": False},
-    "node3": {"host": "pc3", "username": "brenton", "password": None, "pkey": "/home/brenton/.ssh/id_rsa", "legacy": False},
-    "dag01": {"host": "dag01", "username": "brenton", "password": None, "pkey": "/home/brenton/.ssh/id_rsa_legacy", "legacy": True},
-}
-
-NODE3_IP = "192.168.1.3"
-NODE1_CNET_IP = "130.75.73.172"
-NODE3_CNET_IP = "130.75.73.142"
-
-# number of loop iterations
-ITERATIONS = 32
-
-# pause between iterations (seconds)
-PAUSE_SECONDS = 5
-
-# number of packets to run in each sample
-#PACKET_SEQUENCE_LENGTH = 1024
-# for the really low-rate experiments, we can't wait 15 mins per run.
-#PACKET_SEQUENCE_LENGTH = 256
-# for the really high-rate experiments, we can collect some extra trace.
-# though our current training code doesn't use it...
-PACKET_SEQUENCE_LENGTH = 1024
-
-
-# remote working directory (home directories shared over NFS in your environment)
-EMULAB_HOME = "/users/brenton"
-DAG_HOME = "/home/brenton"
-TRACE_DIR = "lemurnn-trace"
 
 # Optional: path to paramiko private key file if you prefer that mode (if you placed it in pkey field above)
 # ========== END CONFIG ==========
@@ -306,39 +276,92 @@ def stop_pid(ssh: paramiko.SSHClient, pid: int) -> None:
     run_command(ssh, f"sudo kill -9 {pid} >/dev/null 2>&1 || true")
 
 
-def main():
-    # pick random CAP,LAT,QUE in [1,10]
-    min_pkt_size = 60
-    max_pkt_size = 1400
-    mean_pkt_size = (min_pkt_size + max_pkt_size)/2
-    min_capacity = 1
-    max_capacity = 10
-    capacity_increment = 1
-    min_queue = 5 * int(mean_pkt_size)
-    max_queue = 100 * int(mean_pkt_size)
-    queue_increment = 10 * int(mean_pkt_size)
-    #min_queue = 5  # packet queue
-    #max_queue = 100
-    #queue_increment = 10
-    min_latency = 0
-    max_latency = 0
-    min_rate = 0.5
-    max_rate = 100
-    #min_rate = 0.01
-    #max_rate = 20
-    #CAP = random.randint(1, 10)
-    #LAT = random.randint(0, 0)
-    #QUE = random.randint(2, 10) * max_pkt_size  # mult by max packet size?
-    ETIME = int(time.time())
-    EMULAB_WORKDIR = f"{EMULAB_HOME}/{TRACE_DIR}/"
-    DAG_WORKDIR = f"{DAG_HOME}/{TRACE_DIR}/"
+def load_emulab_spec(filename):
+    """
+    Load an Emulab specification from a json file.
+    Or use the default.
 
-    #print(f"Experiment parameters: CAP={CAP}, LAT={LAT}, QUE={QUE}, ETIME={ETIME}")
+    :param filename:
+    :return:
+    """
+    em_spec = {
+        "node1": {"host": "pc33", "username": "brenton", "password": None, "pkey": "/home/brenton/.ssh/id_rsa",
+                  "legacy": False},
+        "node2": {"host": "pc93", "username": "brenton", "password": None, "pkey": "/home/brenton/.ssh/id_rsa",
+                  "legacy": False},
+        "node3": {"host": "pc3", "username": "brenton", "password": None, "pkey": "/home/brenton/.ssh/id_rsa",
+                  "legacy": False},
+        "dag01": {"host": "dag01", "username": "brenton", "password": None, "pkey": "/home/brenton/.ssh/id_rsa_legacy",
+                  "legacy": True},
+        'node3_ip': "192.168.1.3",
+        'node1_cnet_ip': "130.75.73.172",
+        'node3_cnet_ip': "130.75.73.142",
+        'pause_seconds': 5,
+        'emulab_home': "/users/brenton",
+        'dag_home': "/home/brenton",
+        'trace_dir': "lemurnn-trace",
+        'moongen_interfaces': "3 4",
+    }
+    if filename:
+        with open(filename, 'r') as fh:
+            em_spec = json.load(fh)
+    else:
+        print("Using default Emulab Spec...")
+    return em_spec
+
+def load_experiment_spec(filename):
+    """
+    Load an experiment spec from a json file.
+
+    :param filename:
+    :return:
+    """
+    ex_spec = {
+        'min_pkt_size': 60,
+        'max_pkt_size': 1400,
+        'min_capacity': 1,
+        'max_capacity': 10,
+        'capacity_increment': 1,
+        'min_queue': 5,
+        'max_queue': 100,
+        'queue_increment': 10,
+        'min_latency': 0,
+        'max_latency': 0,
+        'min_rate': 0.5,
+        'max_rate':100,
+        'iterations': 32,
+        'packet_seq_length': 1024,
+        'link_type': 'bytequeue',
+    }
+    if filename:
+        with open(filename, 'r') as fh:
+            ex_spec = json.load(fh)
+    else:
+        print("Using default Experiment Spec...")
+    ex_spec['mean_pkt_size'] = (ex_spec['min_pkt_size'] + ex_spec['max_pkt_size']) / 2
+    return ex_spec
+
+
+
+def main():
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-x", '--experiment_spec', type=str, default=None)
+    parser.add_argument("-e", '--emulab_spec', type=str, default=None)
+    args = parser.parse_args()
+
+    experiment_spec = load_experiment_spec(args.experiment_spec)
+    emulab_spec = load_emulab_spec(args.emulab_spec)
+
+    ETIME = int(time.time())
+    EMULAB_WORKDIR = f"{emulab_spec['emulab_home']}/{emulab_spec['trace_dir']}/"
+    DAG_WORKDIR = f"{emulab_spec['dag_home']}/{emulab_spec['trace_dir']}/"
 
     print(f"Using paramiko version {paramiko.__version__}")
 
     # Connect to all hosts
     conns = {}
+    HOSTS = {name: emulab_spec[name] for name in ('node1', 'node2', 'node3', 'dag01')}
     try:
         for name, cfg in HOSTS.items():
             print(f"Connecting to {name} ({cfg['host']})...")
@@ -361,11 +384,11 @@ def main():
     run_command(conns["node1"], f"mkdir -p {EMULAB_WORKDIR}", timeout=120)
     run_command(conns["dag01"], f"mkdir -p {DAG_WORKDIR}", timeout=120)
 
-    for CAP in range(min_capacity, max_capacity+1, capacity_increment):
+    for CAP in range(experiment_spec['min_capacity'], experiment_spec['max_capacity']+1, experiment_spec['capacity_increment']):
 
-        for QUE in range(min_queue, max_queue+1, queue_increment):
+        for QUE in range(experiment_spec['min_queue'], experiment_spec['max_queue']+1, experiment_spec['queue_increment']):
 
-            for LAT in range(min_latency, max_latency+1):
+            for LAT in range(experiment_spec['min_latency'], experiment_spec['max_latency']+1):
                 # 0) Start ITGRecv on node3 in background
                 node3 = conns["node3"]
                 itgrecv_log = f"{EMULAB_WORKDIR}/itgrecv_{ETIME}.log"
@@ -385,9 +408,15 @@ def main():
                 node2 = conns["node2"]
                 moongen_log = f"{EMULAB_WORKDIR}/moongen_C{CAP}_L{LAT}_Q{QUE}_{ETIME}.log"
                 #moongen_cmd = f"cd MoonGen ; moongen -r {CAP} -l {LAT} -q {QUE}"
-                interfaces = "3 4"
-                moongen_cmd = f"cd MoonGen ; sudo ./build/MoonGen examples/l2-forward-bsring-lrl.lua -d {interfaces} -r {CAP} {CAP} -l 0 0 -q {QUE} {QUE}"
-                #moongen_cmd = f"cd MoonGen ; sudo ./build/MoonGen examples/l2-forward-psring-lrl.lua -d {interfaces} -r {CAP} {CAP} -l 0 0 -q {QUE} {QUE}"
+                interfaces = emulab_spec['moongen_interfaces']
+                if experiment_spec['link_type'] == 'bytequeue':
+                    # for bytequeue, interpret the queue size to be in kiloByte
+                    moongen_cmd = f"cd MoonGen ; sudo ./build/MoonGen examples/l2-forward-bsring-lrl.lua -d {interfaces} -r {CAP} {CAP} -l 0 0 -q {QUE*1000} {QUE*1000}"
+                elif experiment_spec['link_type'] == 'packetqueue':
+                    moongen_cmd = f"cd MoonGen ; sudo ./build/MoonGen examples/l2-forward-psring-lrl.lua -d {interfaces} -r {CAP} {CAP} -l 0 0 -q {QUE} {QUE}"
+                else:
+                    print(f"ERROR: unknown emulated link type: {experiment_spec['link_type']}")
+                    sys.exit(0)
                 # run under nohup and capture pid
                 print(f"Starting moongen on node2: {moongen_cmd}")
                 try:
@@ -403,7 +432,7 @@ def main():
                 node1 = conns["node1"]
                 print("Running ping from node1 -> node3 (10 packets)...")
                 try:
-                    exit_status, out, err = run_command(node1, f"ping -c 10 {NODE3_IP}")
+                    exit_status, out, err = run_command(node1, f"ping -c 10 {emulab_spec['node3_ip']}")
                     if exit_status == 0:
                         print("Ping completed.")
                     else:
@@ -432,16 +461,15 @@ def main():
                         print("Failed to start dagsnap:", e2)
                         dagsnap_pid = None
 
-
                 # 5) loop for 1024 iterations
                 WORK_SUBDIR = f"{EMULAB_WORKDIR}/C{CAP}_L{LAT}_Q{QUE}_{ETIME}"
                 run_command(node1, f"mkdir -p {WORK_SUBDIR}", timeout=120)
-                for i in range(1, ITERATIONS + 1):
+                for i in range(1, experiment_spec['iterations'] + 1):
                     # pick random rate and convert to pkt/s
                     #RATE_Mbps = random.randint(min_rate, max_rate)
-                    RATE_Mbps = random.uniform(min_rate, max_rate)
-                    RATE_pps = int(RATE_Mbps * 1000000 / (mean_pkt_size * 8))
-                    print(f"[{i}/{ITERATIONS}] RATE_Mbps={RATE_Mbps:.4f}  RATE_pps={RATE_pps}")
+                    RATE_Mbps = random.uniform(experiment_spec['min_rate'], experiment_spec['max_rate'])
+                    RATE_pps = int(RATE_Mbps * 1000000 / (experiment_spec['mean_pkt_size'] * 8))
+                    print(f"[{i}/{experiment_spec['iterations']}] RATE_Mbps={RATE_Mbps:.4f}  RATE_pps={RATE_pps}")
 
                     # Compose filenames
                     tx_log = f"{WORK_SUBDIR}/ditg_i{i}_tx_C{CAP}_L{LAT}_Q{QUE}_Rb{RATE_Mbps:.4f}_Rp{RATE_pps}_{ETIME}.itg"
@@ -465,7 +493,7 @@ def main():
                     # (b/s) / ((B/pkt) * (b/B)) = (pkt/s)
                     #pkt_rate = RATE *1000000 / (8*(max_pkt_size + min_pkt_size)/2)
                     itgsend_cmd = (
-                        f"ITGSend -a {NODE3_IP} -T UDP -z {PACKET_SEQUENCE_LENGTH} -E {RATE_pps} -u {min_pkt_size} {max_pkt_size} -l {tx_log} -x {rx_log} -Sda {NODE3_CNET_IP}"
+                        f"ITGSend -a {emulab_spec['node3_ip']} -T UDP -z {experiment_spec['packet_seq_length']} -E {RATE_pps} -u {experiment_spec['min_pkt_size']} {experiment_spec['max_pkt_size']} -l {tx_log} -x {rx_log} -Sda {emulab_spec['node3_cnet_ip']}"
                         #f"ITGSend -a pc33 -T UDP -z 1024 -E {pkt_rate} -u {min_pkt_size} {max_pkt_size} -l {tx_log} -x {rx_log}"
                     )
 
@@ -483,8 +511,8 @@ def main():
                         # continue to next iteration; logs may still be present.
 
                     # Pause 5 seconds as requested
-                    print(f"Pausing {PAUSE_SECONDS} seconds...")
-                    time.sleep(PAUSE_SECONDS)
+                    print(f"Pausing {emulab_spec['pause_seconds']} seconds...")
+                    time.sleep(emulab_spec['pause_seconds'])
 
                     # Convert the log files to CSV/text format using ITGDec on node1
                     # The home dir is shared, so node1 can read both send and receiver logs.
