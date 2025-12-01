@@ -7,19 +7,8 @@ import json
 import os
 import re
 import sys
-
 import numpy as np
-from collections import deque
 import glob
-import matplotlib.pyplot as plt
-from dataclasses import dataclass
-from typing import List
-import torch
-import torch.nn as nn
-import torch.optim as optim
-import torch.utils.data as data
-from torch.utils.data import DataLoader, TensorDataset
-
 from TraceGenerator import TraceGenerator, LinkProperties, TraceSample
 
 
@@ -117,8 +106,12 @@ class TraceGeneratorDagData(TraceGenerator):
         # the CAP value is Mbit/s = Kbit/ms.  No need to convert.
         capacity_s = np.float32(c_val)
 
-        # queue size is in Bytes, so convert to KByte
-        queue_size_s = np.float32(q_val) / 1000
+        # there was a change in our data generation
+        # if queue size > 1000, assume it is in Bytes, so convert to KByte
+        #XXX this is not an ideal way to distinguish between queue units
+        queue_size_s = np.float32(q_val)
+        if queue_size_s > 1000:
+            queue_size_s /= 1000
 
         inter_pkt_times_v = np.zeros(seq_length)
         pkt_size_v = np.zeros(seq_length)
@@ -146,7 +139,7 @@ class TraceGeneratorDagData(TraceGenerator):
                         # pkt_size is in Byte, so convert to KByte
                         pkt_size_v[i] = np.float32(row['size']) / 1000
                         dropped_status[i] = np.float32(row['dropped_status'])
-                        dropped_sizes.append(int(row['size'])) #XXX maybe convert this to Kbyte too?
+                        dropped_sizes.append(int(row['size'])) #XXX this is not used anywhere.  Just leave it.
                         dropped_indices.append(i)
 
                         # 2. Calculate 't' (inter-packet time)
@@ -180,7 +173,7 @@ class TraceGeneratorDagData(TraceGenerator):
             return None
 
         pkt_arrival_times_v = np.cumsum(inter_pkt_times_v)
-        backlog_v = capacity_s * latency_v
+        backlog_v = capacity_s * latency_v / 8      # [Kbit/ms][ms]/[bit/Byte] = [KByte]
 
         ts = TraceSample(pkt_arrival_times_v, inter_pkt_times_v, pkt_size_v, backlog_v,
                             latency_v, capacity_v, queue_size_v, dropped_status,

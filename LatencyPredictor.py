@@ -193,7 +193,8 @@ class LatencyPredictor:
         # compute the val and test loss on their absolute values
         output_scale = 1.0
         if self.trace_generator.normalize:
-            output_scale = self.trace_generator.link_properties.max_pkt_size
+            print("WARNING: normalize not suppoorted in this version")
+            #output_scale = self.trace_generator.link_properties.max_pkt_size
 
         for epoch_i in range(n_epochs):
             self.epoch += 1
@@ -517,8 +518,8 @@ class LatencyPredictor:
         plt.scatter(pkt_arrival_times_v[drop_indices_pred], predicted_backlog[drop_indices_pred], color='orange', marker='o',
                     label="Predicted Dropped Packets", linewidth=2, zorder=2)
 
-        plt.xlabel("Time", fontsize=18)
-        plt.ylabel("Backlog", fontsize=18)
+        plt.xlabel("Time [ms]", fontsize=18)
+        plt.ylabel("Backlog [KByte]", fontsize=18)
         # plt.title("Generated vs Predicted Backlog and Dropped Packets")
         plt.legend()
         plt.grid()

@@ -3,14 +3,14 @@ from dataclasses import dataclass
 
 @dataclass
 class LinkProperties:
-    min_arrival_rate:float
-    max_arrival_rate:float
-    min_capacity: float
-    max_capacity: float
-    min_pkt_size: float  #int
-    max_pkt_size: float  #int
-    min_queue_bytes: float  #int
-    max_queue_bytes: float  #int
+    min_arrival_rate:float    # KBit/ms = MBit/s
+    max_arrival_rate:float    # KBit/ms = MBit/s
+    min_capacity: float       # KBit/ms = MBit/s
+    max_capacity: float       # KBit/ms = MBit/s
+    min_pkt_size: float       # KByte
+    max_pkt_size: float       # KByte
+    min_queue_bytes: float    # KByte
+    max_queue_bytes: float    # KByte
     #inter_pkt_time:float = 1.0  # Average time between packets (seconds per packet)
     #seq_length:int = 128  # Length of each sequence
 
@@ -19,13 +19,13 @@ class LinkProperties:
 
 link_properties_library = {
     'default':      LinkProperties(min_arrival_rate=0.2,
-                                   max_arrival_rate=1,
-                                   min_capacity=500,
-                                   max_capacity=1000,
-                                   min_pkt_size=500,
-                                   max_pkt_size=1500,
-                                   min_queue_bytes=2500,
-                                   max_queue_bytes=10000),
+                                   max_arrival_rate=15,
+                                   min_capacity=5,
+                                   max_capacity=10,
+                                   min_pkt_size=0.06,
+                                   max_pkt_size=1.4,
+                                   min_queue_bytes=5,
+                                   max_queue_bytes=10),
 
     # same scale as default, but with less tendency to produce huge backlogs
     'default-light': LinkProperties(min_arrival_rate=0.2,
