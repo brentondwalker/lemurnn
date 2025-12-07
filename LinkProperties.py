@@ -27,6 +27,15 @@ link_properties_library = {
                                    min_queue_bytes=5,
                                    max_queue_bytes=10),
 
+    'daglike': LinkProperties(min_arrival_rate=0.2,
+                              max_arrival_rate=15,
+                              min_capacity=1,
+                              max_capacity=10,
+                              min_pkt_size=0.06,
+                              max_pkt_size=1.4,
+                              min_queue_bytes=5,
+                              max_queue_bytes=50),
+
     # same scale as default, but with less tendency to produce huge backlogs
     'default-light': LinkProperties(min_arrival_rate=0.2,
                               max_arrival_rate=1,

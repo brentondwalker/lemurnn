@@ -496,8 +496,9 @@ class LatencyPredictor:
         pkt_arrival_times_v = self.trace_generator.get_sample(test_index, data_set_name).pkt_arrival_times_v
 
         if self.trace_generator.normalize:
-            true_backlog *= self.trace_generator.link_properties.max_pkt_size
-            predicted_backlog *= self.trace_generator.link_properties.max_pkt_size
+            print("WARNING: normalize not suppoorted in this version")
+            #true_backlog *= self.trace_generator.link_properties.max_pkt_size
+            #predicted_backlog *= self.trace_generator.link_properties.max_pkt_size
 
         # turn off interactive mode so plots don't display until we call plt.show()
         plt.ioff()

@@ -51,6 +51,7 @@ def main():
         hidden = (hidden, torch.zeros(num_layers, batch_size, hidden_size))
     dataX = torch.tensor(input_v, dtype=torch.float32).unsqueeze(dim=0)
     dataY = torch.tensor(output_v, dtype=torch.float32).unsqueeze(dim=0)
+    trace_generator.print_means(dataX, dataY)
     print(f"dataX: {dataX.shape}\tdataY: {dataY.shape}")
     backlog_pred, dropped_pred, _ = model(dataX, hidden)
     print(f"backlog_pred: {backlog_pred.shape}\tdropped_pred: {dropped_pred.shape}")
@@ -93,8 +94,8 @@ def main():
                 marker='o',
                 label="Predicted Dropped Packets", linewidth=2, zorder=2)
 
-    plt.xlabel("Time", fontsize=18)
-    plt.ylabel("Backlog", fontsize=18)
+    plt.xlabel("Time [ms]", fontsize=18)
+    plt.ylabel("Backlog [KByte]", fontsize=18)
     # plt.title("Generated vs Predicted Backlog and Dropped Packets")
     plt.legend()
     plt.grid()
