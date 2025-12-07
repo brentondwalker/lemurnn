@@ -44,8 +44,8 @@ class TraceGeneratorCodel(TraceGenerator):
         pkt_arrival_rate_ms = arrival_rate/(8*mean_pkt_size_kbyte)
         inter_pkt_time_ms = 1.0 / pkt_arrival_rate_ms
         pkt_arrival_times_v = np.cumsum(np.random.exponential(inter_pkt_time_ms, seq_length))
-        pkt_size_v = np.rint(
-            np.random.uniform(self.link_properties.min_pkt_size, self.link_properties.max_pkt_size, seq_length))  # Packet size between 60 and 1000 bytes
+        # if we measure packet size in KByte, then we can't round the size to integer values
+        pkt_size_v = np.random.uniform(self.link_properties.min_pkt_size, self.link_properties.max_pkt_size, seq_length)
         capacity_s = np.random.uniform(self.link_properties.min_capacity, self.link_properties.max_capacity)
         capacity_v = np.repeat(capacity_s, seq_length)  # Link capacity (bytes per unit time)
         queue_bytes_s = np.rint(np.random.uniform(self.link_properties.min_queue_bytes, self.link_properties.max_queue_bytes))  # size of queue in bytes

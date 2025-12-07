@@ -9,6 +9,7 @@ from LinkEmuModel import LinkEmuModel
 from LinkProperties import link_properties_library
 from NonManualRNN import NonManualRNN
 from TraceGenerator import *
+from TraceGeneratorByteQueue import TraceGeneratorByteQueue
 from TraceGeneratorCodel import TraceGeneratorCodel
 from LatencyPredictor import *
 from LatencyPredictorEarthmover import LatencyPredictorEarthmover
@@ -95,7 +96,8 @@ def main():
     elif codel:
         trace_generator = TraceGeneratorCodel(link_properties, normalize=normalize, base_interval=10, codel_threshold=5)
     else:
-        trace_generator = TraceGenerator(link_properties, normalize=normalize)
+        #trace_generator = TraceGenerator(link_properties, normalize=normalize)
+        trace_generator = TraceGeneratorByteQueue(link_properties, normalize=normalize)
 
     if multiloader:
         trace_generator.create_multiloaders(1024*kilo_training_samples, [4, 8, 16, 32, 64, 128, 256],
