@@ -3,8 +3,11 @@
 import argparse
 from LinkProperties import link_properties_library
 from LatencyPredictor import *
+from TraceGeneratorByteQueue import TraceGeneratorByteQueue
+from TraceGeneratorCodel import TraceGeneratorCodel
 from TraceGeneratorDagData import TraceGeneratorDagData
 from TraceGenerator import TraceGenerator
+from TraceGeneratorPacketQueue import TraceGeneratorPacketQueue
 
 """
 Run a model on a single trace file and plot the prediction vs the truth.
@@ -19,6 +22,9 @@ def main():
     parser.add_argument("-s", '--hidden_size', type=int, default=8)
     parser.add_argument('--seq_len', type=int, default=128)
     parser.add_argument('--dag_data', type=str, action='append', default=None)
+    parser.add_argument('--data_seed', type=int, default=None)
+    parser.add_argument('--link_properties', type=str, default='default')
+    parser.add_argument('--codel', action='store_true')
     parser.add_argument('--packetqueue', action='store_true')
     parser.add_argument('--lstm', action='store_true')
     parser.add_argument('--normalize', action='store_true')
@@ -32,11 +38,25 @@ def main():
     use_lstm = args.lstm
     normalize = args.normalize
     sample_data = args.dag_data
+    link_properties_str = args.link_properties
+    data_seed = args.data_seed
+    codel = args.codel
+    packetqueue = args.packetqueue
 
-    link_properties = link_properties_library['default']
+    link_properties = link_properties_library[link_properties_str]
 
     # load the data sample
-    trace_generator = TraceGeneratorDagData(link_properties, normalize=normalize, datadirs=sample_data)
+    if sample_data:
+        trace_generator = TraceGeneratorDagData(link_properties, normalize=normalize, datadirs=sample_data)
+    elif packetqueue:
+        trace_generator = TraceGeneratorPacketQueue(link_properties, normalize=normalize)
+    elif codel:
+        trace_generator = TraceGeneratorCodel(link_properties, normalize=normalize, base_interval=10, codel_threshold=5)
+    else:
+        trace_generator = TraceGeneratorByteQueue(link_properties, normalize=normalize)
+
+    if data_seed:
+        np.random.seed(data_seed)
     trace_sample = trace_generator.generate_trace_sample(seq_len)
     input_v, output_v = trace_generator.feature_vector_from_sample(trace_sample)
 
