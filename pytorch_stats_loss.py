@@ -32,7 +32,8 @@ def symmetric_earthmover(tensor_a, tensor_b, p=1, normalize=False):
     #print(tensor_a.shape, tensor_b.shape)
     norm_term = 1.0
     if normalize:
-        norm_term = 2.0/(torch.sum(tensor_a) + torch.sum(tensor_b))
+        if (torch.sum(tensor_a) + torch.sum(tensor_b)) > 0:
+            norm_term = 2.0/(torch.sum(tensor_a) + torch.sum(tensor_b))
 
     cdf_tensor_a = torch.cumsum(norm_term * tensor_a, dim=-1)
     cdf_tensor_b = torch.cumsum(norm_term * tensor_b, dim=-1)
