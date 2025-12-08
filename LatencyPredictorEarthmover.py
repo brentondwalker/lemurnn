@@ -73,6 +73,7 @@ class LatencyPredictorEarthmover(LatencyPredictor):
             self.model.train()  # Set to training mode
             train_loss, train_backlog_loss, train_dropped_loss, train_droprate_loss, train_em_loss = 0, 0, 0, 0, 0
             num_train_samples = 0
+            batch_size = 0
             for loader in self.trace_generator.get_loader_iterator('train'):
                 for X_batch, y_batch in loader:
                     #print(X_batch.shape, y_batch.shape)

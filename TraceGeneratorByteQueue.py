@@ -34,9 +34,12 @@ class TraceGeneratorByteQueue(TraceGenerator):
         return extra_dataset_properties
 
     def generate_trace_sample(self, seq_length:int):
+        # compute the packet arrival rate [pkt/ms] to achieve teh desired arrival rate
         arrival_rate = np.random.uniform(self.link_properties.min_arrival_rate, self.link_properties.max_arrival_rate)
-        inter_pkt_time = 1.0 / arrival_rate
-        pkt_arrival_times_v = np.cumsum(np.random.exponential(inter_pkt_time, seq_length))
+        mean_pkt_size_kbyte = (self.link_properties.max_pkt_size + self.link_properties.min_pkt_size) / 2
+        pkt_arrival_rate_ms = arrival_rate / (8 * mean_pkt_size_kbyte)
+        inter_pkt_time_ms = 1.0 / pkt_arrival_rate_ms
+        pkt_arrival_times_v = np.cumsum(np.random.exponential(inter_pkt_time_ms, seq_length))
         # if we measure packet size in KByte, then we can't round the size to integer values
         pkt_size_v = np.random.uniform(self.link_properties.min_pkt_size, self.link_properties.max_pkt_size, seq_length)
         capacity_s = np.random.uniform(self.link_properties.min_capacity, self.link_properties.max_capacity)
@@ -100,9 +103,6 @@ class TraceGeneratorByteQueue(TraceGenerator):
 
             if len(queue_pkts) == 0 and remaining_overhead_bytes == 0:
                 total_bytes_sent = 0
-
-            if remaining_overhead_bytes > 0:
-                print(f"REMAINING_OVERHEAD_BYTES = {remaining_overhead_bytes}")
 
             #if len(queue_pkts) + 1 > queue_size_s:
             if queue_bytes + pkt_size_v[i] > queue_size_s:
