@@ -37,8 +37,9 @@ class TraceGeneratorByteQueue(TraceGenerator):
         # compute the packet arrival rate [pkt/ms] to achieve teh desired arrival rate
         arrival_rate = np.random.uniform(self.link_properties.min_arrival_rate, self.link_properties.max_arrival_rate)
         mean_pkt_size_kbyte = (self.link_properties.max_pkt_size + self.link_properties.min_pkt_size) / 2
+        # [Kbit/ms] / [bit/Byte][KByte/pkt] = [pkt/ms]
         pkt_arrival_rate_ms = arrival_rate / (8 * mean_pkt_size_kbyte)
-        inter_pkt_time_ms = 1.0 / pkt_arrival_rate_ms
+        inter_pkt_time_ms = 1.0 / pkt_arrival_rate_ms   # [ms/pkt]
         pkt_arrival_times_v = np.cumsum(np.random.exponential(inter_pkt_time_ms, seq_length))
         # if we measure packet size in KByte, then we can't round the size to integer values
         pkt_size_v = np.random.uniform(self.link_properties.min_pkt_size, self.link_properties.max_pkt_size, seq_length)
@@ -60,15 +61,15 @@ class TraceGeneratorByteQueue(TraceGenerator):
         queued_packets = 0
 
         # In case an inter-packet interval leaves us in the middle of a packet overhead
-        remaining_overhead_bytes = 0
+        remaining_overhead_kbytes = 0
 
         backlog_v = np.zeros(seq_length)
         latency_v = np.zeros(seq_length)  # Track latency (proportional to backlog)
-        queue_bytes = pkt_size_v[0]  # Current queue length in bytes
+        queue_kbytes = pkt_size_v[0]  # Current queue length in kbytes
         queue_pkts = deque([pkt_size_v[0]])
-        total_bytes_sent = 0
+        total_kbytes_sent = 0
 
-        backlog_v[0] = queue_bytes + self.link_properties.overhead_bytes
+        backlog_v[0] = queue_kbytes + self.link_properties.overhead_bytes
         latency_v[0] = backlog_v[0] * 8 / capacity_s   # [KByte]*[bit/Byte]/[KBit/ms] = [ms]
 
         dropped_sizes = []  # Store dropped packet sizes
@@ -76,48 +77,48 @@ class TraceGeneratorByteQueue(TraceGenerator):
         dropped_status = np.zeros(seq_length, dtype=int)
 
         for i in range(1, seq_length):
-            time_passed = pkt_arrival_times_v[i] - pkt_arrival_times_v[i - 1]  # Time between packets
-            bytes_processed_interval = time_passed * capacity_s
-            queue_bytes = max(0, queue_bytes - bytes_processed_interval)  # Process queued packets
+            time_passed_ms = pkt_arrival_times_v[i] - pkt_arrival_times_v[i - 1]  # Time between packets
+            kbytes_processed_interval = time_passed_ms * capacity_s / 8
+            queue_kbytes = max(0, queue_kbytes - kbytes_processed_interval)  # Process queued packets
             # go through the queue and figure out which packets departed
-            total_bytes_sent += bytes_processed_interval
+            total_kbytes_sent += kbytes_processed_interval
 
             # a lot of logic required for the possibility that a packet arrival happens
             # during the TX of the overhead between packets
-            if total_bytes_sent >= remaining_overhead_bytes:
-                total_bytes_sent -= remaining_overhead_bytes
-                remaining_overhead_bytes = 0
+            if total_kbytes_sent >= remaining_overhead_kbytes:
+                total_kbytes_sent -= remaining_overhead_kbytes
+                remaining_overhead_kbytes = 0
             else:
-                remaining_overhead_bytes -= total_bytes_sent
-                total_bytes_sent = 0
+                remaining_overhead_kbytes -= total_kbytes_sent
+                total_kbytes_sent = 0
 
-            while len(queue_pkts) > 0 and total_bytes_sent >= queue_pkts[0]:
-                total_bytes_sent -= queue_pkts[0]
+            while len(queue_pkts) > 0 and total_kbytes_sent >= queue_pkts[0]:
+                total_kbytes_sent -= queue_pkts[0]
                 queue_pkts.popleft()
                 # see how much of the packet overhead we also sent
-                if total_bytes_sent >= self.link_properties.overhead_bytes:
-                    remaining_overhead_bytes = 0
+                if total_kbytes_sent >= self.link_properties.overhead_bytes:
+                    remaining_overhead_kbytes = 0
                 else:
-                    remaining_overhead_bytes = self.link_properties.overhead_bytes - total_bytes_sent
-                    total_bytes_sent = 0
+                    remaining_overhead_kbytes = self.link_properties.overhead_bytes - total_kbytes_sent
+                    total_kbytes_sent = 0
 
-            if len(queue_pkts) == 0 and remaining_overhead_bytes == 0:
-                total_bytes_sent = 0
+            if len(queue_pkts) == 0 and remaining_overhead_kbytes == 0:
+                total_kbytes_sent = 0
 
             #if len(queue_pkts) + 1 > queue_size_s:
-            if queue_bytes + pkt_size_v[i] > queue_size_s:
+            if queue_kbytes + pkt_size_v[i] > queue_size_s:
                 dropped_sizes.append(pkt_size_v[i])  # Store the dropped packet size
                 dropped_indices.append(i)  # Store the packet index
                 dropped_status[i] = 1  # this time step drop or not drop
             else:
                 queue_pkts.append(pkt_size_v[i])  # Accept the packet
-                queue_bytes += pkt_size_v[i]
+                queue_kbytes += pkt_size_v[i]
 
-            backlog_v[i] = queue_bytes + self.link_properties.overhead_bytes * len(queue_pkts) + remaining_overhead_bytes
-            latency_v[i] = backlog_v[i] * 8 / capacity_s  # Store latency at this time step
+            backlog_v[i] = queue_kbytes + self.link_properties.overhead_bytes * len(queue_pkts) + remaining_overhead_kbytes
+            latency_v[i] = backlog_v[i] * 8 / capacity_s   # [KByte][bit/Byte]/[KBit/ms] = [ms]
 
         inter_pkt_times_v = np.diff(
-            np.insert(pkt_arrival_times_v, 0, 0))  # shouldnt this just give us back the inter_pkt_time_in?
+            np.insert(pkt_arrival_times_v, 0, 0))  # shouldn't this just give us back the inter_pkt_time_in?
 
         if self.normalize:
             print("WARNING: normalization no longer supported in this branch")
