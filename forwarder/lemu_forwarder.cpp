@@ -311,7 +311,9 @@ static int prediction_thread_main(void *arg) {
     while (!force_quit) {
         nb_dq = rte_ring_sc_dequeue_burst(ring_in, (void **)bufs, BURST_SIZE, NULL);
         if (nb_dq == 0) continue;
-        std::cout << "PREDICTION thread dequeued: " << nb_dq << std::endl;
+	if (nb_dq > 1) {
+	  std::cout << "PREDICTION thread dequeued: " << nb_dq << std::endl;
+	}
 
         for (i = 0; i < nb_dq; i++) {
             uint64_t arrival_tsc = *TIMESTAMP_FIELD(bufs[i]);
@@ -341,20 +343,20 @@ static int prediction_thread_main(void *arg) {
             prediction_timer = rte_rdtsc();
             LEmuRnn::PacketAction pa = model.predict(inter_packet_time_ms, size_kbyte);
             prediction_time_ms = 1000.0*(((double)(rte_rdtsc() - prediction_timer))/tsc_rate);
-            std::cout << "\tprediction took ms: " << prediction_time_ms << std::endl;
+            //std::cout << "\tprediction took ms: " << prediction_time_ms << std::endl;
             packets_total += 1;
             if (pa.drop) {
                 packets_dropped += 1;
                 num_drops++;  // local version.  Should entfern the other one.
                 rte_pktmbuf_free(bufs[i]);
-                std::cout << "\tdrop!!" << std::endl;
+                std::cout << "\tdrop!!\t" << prediction_time_ms << std::endl;
             } else {
                 std::cout << "\tPacket Action: " << pa.latency_ms
-                          << "\t" << pa.drop << std::endl;
+                          << "\t" << pa.drop << "\t" << prediction_time_ms << std::endl;
                 send_time_tsc = arrival_tsc + (uint64_t)(pa.latency_ms * tsc_rate / 1000.0);
                 //uint64_t send_time_tsc = arrival_tsc + (uint64_t)(pa.latency_ms * 1.0);
-                std::cout << arrival_tsc << "\t" << inter_packet_time_tsc  << "\t" << inter_packet_time_ms
-                          << "\t" << pa.latency_ms << "\t" << send_time_tsc << std::endl;
+                //std::cout << arrival_tsc << "\t" << inter_packet_time_tsc  << "\t" << inter_packet_time_ms
+                //          << "\t" << pa.latency_ms << "\t" << send_time_tsc << std::endl;
                 *SEND_TIME_FIELD(bufs[i]) = send_time_tsc;
                 nb_enq = rte_ring_sp_enqueue(ring_out, (void *)bufs[i]);
                 if (unlikely(nb_enq != 0)) {
@@ -436,7 +438,7 @@ static int tx_thread_main(void *arg) {
             continue;
         }
 
-	std::cout << "\tdrop rate: " << (packets_dropped/packets_total) << std::endl;
+	//std::cout << "\tdrop rate: " << (packets_dropped/packets_total) << std::endl;
 
         // using BURST_SIZE>1, we have to loop over the possibly multiple mbufs.
         for (i = 0; i < nb_dq; i++) {
