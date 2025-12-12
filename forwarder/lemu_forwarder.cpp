@@ -350,13 +350,26 @@ static int prediction_thread_main(void *arg) {
             // packet actually gets sent.
             // Doing this in the prediction thread wastes even more time.
             // But it's not much compared to the prediction itself, and all out couts.
+            // We'd like the first columns to match the trace files, so we can run
+            // arbitrary models against it and verify the results.
+            // - packet_number
+            // - size [Bytes]
+            // - transmit_time [epoch seconds, float]
+            // - receive_time [epoch seconds, float, 0 if dropped]
+            // - latency [seconds, float]
+            // - dropped_status [1 or 0]
+            // 
             if (data_save_file.is_open()) {
                 data_save_file << packet_count << "\t"
+                               << size_byte << "\t"
+                               << (arrival_ms/1000.0) << "\t"
+                               << ((arrival_ms + pa.latency_ms)/1000.0) << "\t"
+                               << (pa.latency_ms/1000.0) << "\t"
+                               << pa.drop << "\t"
                                << inter_packet_time_ms << "\t"
                                << processed_kbit << "\t"
                                << size_byte << "\t"
                                << pa.latency_ms << "\t"
-                               << pa.drop << "\t"
                                << prediction_time_ms << "\t"
                                << num_drops << "\t"
                                << arrival_tsc << "\t"
