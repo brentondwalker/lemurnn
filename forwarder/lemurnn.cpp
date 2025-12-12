@@ -115,8 +115,8 @@ LEmuRnn::PacketAction LEmuRnn::predict(double inter_packet_time_ms, double packe
 
     // The raw output of the model is trained to be like a queue backlog.
     // Divide by capacity to get the corresponding latency.
-    // [KB]/[KB/ms]=[ms]
-    double latency_ms = backlog_tensor[0][0][0].item<double>() / capacity_;
+    // [KByte][bit/Byte]/[Kbit/ms]=[ms]
+    double latency_ms = backlog_tensor[0][0][0].item<double>() * 8.0 / capacity_;
     bool drop = (bool)torch::argmax(drop_tensor).item().toInt();
     //std::cout << "drop_tensor: " << drop_tensor << "\tdrop: " << drop << std::endl;
     PacketAction pa = {latency_ms, drop};

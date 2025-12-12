@@ -275,7 +275,25 @@ static int prediction_thread_main(void *arg) {
         if (!data_save_file.is_open()) {
             std::cerr << "Error: Could not open file " << data_save_filename << " for writing." << std::endl;
             return 1;
-        }
+        } else {
+	  data_save_file << "packet_number\t"
+			 << "size\t"
+			 << "transmit_time\t"
+			 << "receive_time\t"
+			 << "latency\t"
+			 << "dropped_status\t"
+			 << "inter_packet_time_ms\t"
+			 << "processed_kbit\t"
+			 << "size_byte\t"
+			 << "pa.latency_ms\t"
+			 << "prediction_time_ms\t"
+			 << "num_drops\t"
+			 << "arrival_tsc\t"
+			 << "arrival_ms\t"
+			 << "inter_packet_time_tsc\t"
+			 << "size_kbyte\t"
+			 << "send_time_tsc" << std::endl;
+	}
     }
     // need to keep track of the arrival time of the last packet
     uint64_t last_packet_time_tsc = 0;
@@ -525,13 +543,13 @@ int parse_options(int argc, char *argv[]) {
     }
 
     std::cout << "--- POSIX Getopt Parsed ---\n";
-    std::cout << "Hidden Size: " << hidden_size << "\n";
-    std::cout << "Num Layers:  " << num_layers << "\n";
-    std::cout << "Model File:  " << model_file << "\n";
-    std::cout << "Capacity:    " << capacity << "\n";
-    std::cout << "Queue size:  " << queue_size << "\n";
-    std::cout << "Model type:  " << model_type << "\n";
-    std::cout << "Data save file:  " << data_save_filename_base << "\n";
+    std::cout << "Hidden Size:        " << hidden_size << "\n";
+    std::cout << "Num Layers:         " << num_layers << "\n";
+    std::cout << "Model File:         " << model_file << "\n";
+    std::cout << "Capacity [Kbit/ms]: " << capacity << "\n";
+    std::cout << "Queue size [KByte]: " << queue_size << "\n";
+    std::cout << "Model type:         " << model_type << "\n";
+    std::cout << "Data save file:     " << data_save_filename_base << "\n";
 
     return 0;
 }
