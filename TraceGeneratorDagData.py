@@ -14,7 +14,7 @@ from TraceGenerator import TraceGenerator, LinkProperties, TraceSample
 
 class TraceGeneratorDagData(TraceGenerator):
 
-    def __init__(self, link_properties:LinkProperties=None, input_str='bscq', output_str='bd', normalize=False, datadirs=None):
+    def __init__(self, link_properties:list[LinkProperties]=None, input_str='bscq', output_str='bd', normalize=False, datadirs=None):
         super().__init__(link_properties, input_str, output_str)
         self.data_type = 'dag'
         self.normalize = normalize
@@ -80,7 +80,7 @@ class TraceGeneratorDagData(TraceGenerator):
                 print(f"WARNING: TraceGeneratorDagData: not enough samples!  Recycling the pool.")
 
 
-    def generate_trace_sample(self, seq_length:int):
+    def generate_trace_sample(self, lp:LinkProperties, seq_length:int):
         """
         As a sort of normalization, we try to express everything in KByte and KByte/ms.
         This should keep input and output values from getting to ridiculous.
