@@ -3,12 +3,12 @@
 import argparse
 import sys
 
+from DropGRU import DropGRU
 from DropLSTM import DropLSTM
 from DropReluLSTM import DropReluLSTM
 from LinkEmuModel import LinkEmuModel
 from LinkProperties import link_properties_library
 from NonManualRNN import NonManualRNN
-from TraceGenerator import *
 from TraceGeneratorByteQueue import TraceGeneratorByteQueue
 from TraceGeneratorCodel import TraceGeneratorCodel
 from LatencyPredictor import *
@@ -44,6 +44,7 @@ def main():
     parser.add_argument('--tanh', action='store_true')
     parser.add_argument('--relu_lstm', action='store_true')
     parser.add_argument('--lstm', action='store_true')
+    parser.add_argument('--gru', action='store_true')
     parser.add_argument('--normalize', action='store_true')
     parser.add_argument('--multiloader', action='store_true')
     parser.add_argument('--drop_masking', action='store_true')
@@ -71,6 +72,7 @@ def main():
     earthmover = args.earthmover
     use_relu_lstm = args.relu_lstm
     use_lstm = args.lstm
+    use_gru = args.gru
     normalize = args.normalize
     multiloader = args.multiloader
     drop_masking = args.drop_masking
@@ -119,7 +121,12 @@ def main():
                                           learning_rate=learning_rate, dropout_rate=dropout_rate)
     elif use_lstm:
         print("USING LSTM!!")
-        model:LinkEmuModel = DropLSTM(input_size=trace_generator.input_size(),
+        model: LinkEmuModel = DropLSTM(input_size=trace_generator.input_size(),
+                                       hidden_size=hidden_size, num_layers=num_layers,
+                                       learning_rate=learning_rate, dropout_rate=dropout_rate)
+    elif use_gru:
+        print("USING GRU!!")
+        model: LinkEmuModel = DropGRU(input_size=trace_generator.input_size(),
                                       hidden_size=hidden_size, num_layers=num_layers,
                                       learning_rate=learning_rate, dropout_rate=dropout_rate)
     else:
