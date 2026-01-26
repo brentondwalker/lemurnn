@@ -63,7 +63,8 @@ static int num_layers = 0;
 static std::string model_type = "rnn";
 static std::string model_file;
 static double capacity = 1.0;      // units of [Kbit/ms]=[Mbit/s]
-static double queue_size = 5.0; // units of [KByte]
+static double queue_size = 5.0;    // units of [KByte]
+static double base_latency = 0.0;  // units of [ms]
 std::string data_save_filename_base;
 
 // keep track of some packet stats
@@ -333,7 +334,8 @@ static int prediction_thread_main(void *arg) {
             } else {
                 std::cout << "\tPacket Action: " << pa.latency_ms
                           << "\t" << pa.drop << std::endl;
-                send_time_tsc = arrival_tsc + (uint64_t)(pa.latency_ms * tsc_rate / 1000.0);
+                //send_time_tsc = arrival_tsc + (uint64_t)(pa.latency_ms * tsc_rate / 1000.0);
+                send_time_tsc = arrival_tsc + (uint64_t)((pa.latency_ms + base_latency) * tsc_rate / 1000.0);
                 //uint64_t send_time_tsc = arrival_tsc + (uint64_t)(pa.latency_ms * 1.0);
                 std::cout << arrival_tsc << "\t" << inter_packet_time_tsc  << "\t" << inter_packet_time_ms
                           << "\t" << pa.latency_ms << "\t" << send_time_tsc << std::endl;
@@ -502,6 +504,14 @@ int parse_options(int argc, char *argv[]) {
                 return 1;
             }
             break;
+        case 'd':
+            try {
+                base_latency = std::stod(optarg);
+            } catch (const std::invalid_argument&) {
+                std::cerr << "Error: -d requires a valid double.\n";
+                return 1;
+            }
+            break;
         case 'm':
             model_file = optarg;
             break;
@@ -530,6 +540,7 @@ int parse_options(int argc, char *argv[]) {
     std::cout << "Model File:  " << model_file << "\n";
     std::cout << "Capacity:    " << capacity << "\n";
     std::cout << "Queue size:  " << queue_size << "\n";
+    std::cout << "Base latency:" << base_latency << "\n";
     std::cout << "Model type:  " << model_type << "\n";
     std::cout << "Data save file:  " << data_save_filename_base << "\n";
 
