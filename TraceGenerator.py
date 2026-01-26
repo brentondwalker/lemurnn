@@ -3,6 +3,7 @@ TraceGenerator
 Generate synthetic network data.
 """
 import json
+import random
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -30,8 +31,8 @@ class TraceSample:
 
 class TraceGenerator:
 
-    def __init__(self, link_properties:LinkProperties, input_str='bscq', output_str='bd', normalize=False):
-        self.link_properties = link_properties
+    def __init__(self, link_properties:list[LinkProperties], input_str='bscq', output_str='bd', normalize=False):
+        self.link_properties:list[LinkProperties] = link_properties
         self.input_str = input_str
         self.output_str = output_str
         self.normalize = normalize
@@ -98,25 +99,25 @@ class TraceGenerator:
         return len(self.output_str)
 
 
-    def generate_trace_sample(self, seq_length:int):
-        # compute the packet arrival rate [pkt/ms] to achieve teh desired arrival rate
-        arrival_rate = np.random.uniform(self.link_properties.min_arrival_rate, self.link_properties.max_arrival_rate)
-        mean_pkt_size_kbyte = (self.link_properties.max_pkt_size + self.link_properties.min_pkt_size)/2
+    def generate_trace_sample(self, lp:LinkProperties, seq_length:int):
+        # compute the packet arrival rate [pkt/ms] to achieve the desired arrival rate
+        arrival_rate = np.random.uniform(lp.min_arrival_rate, lp.max_arrival_rate)
+        mean_pkt_size_kbyte = (lp.max_pkt_size + lp.min_pkt_size)/2
         pkt_arrival_rate_ms = arrival_rate/(8*mean_pkt_size_kbyte)
         inter_pkt_time_ms = 1.0 / pkt_arrival_rate_ms
         pkt_arrival_times_v = np.cumsum(np.random.exponential(inter_pkt_time_ms, seq_length))
         # if we measure packet size in KByte, then we can't round the size to integer values
-        pkt_size_v = np.random.uniform(self.link_properties.min_pkt_size, self.link_properties.max_pkt_size, seq_length)
-        capacity_s = np.random.uniform(self.link_properties.min_capacity, self.link_properties.max_capacity)
+        pkt_size_v = np.random.uniform(lp.min_pkt_size, lp.max_pkt_size, seq_length)
+        capacity_s = np.random.uniform(lp.min_capacity, lp.max_capacity)
         capacity_v = np.repeat(capacity_s, seq_length)  # Link capacity (bytes per unit time)
 
         # queue size of <= 0 indicates infinite queue
-        if self.link_properties.max_queue_bytes <= 0:
+        if lp.max_queue_bytes <= 0:
             # but we don't want to pass inf as one of the inputs, so set that to zero
             queue_bytes_s = np.inf
             queue_bytes_v = np.repeat(0, seq_length)
         else:
-            queue_bytes_s = np.rint(np.random.uniform(self.link_properties.min_queue_bytes, self.link_properties.max_queue_bytes))  # size of queue in bytes
+            queue_bytes_s = np.rint(np.random.uniform(lp.min_queue_bytes, lp.max_queue_bytes))  # size of queue in bytes
             queue_bytes_v = np.repeat(queue_bytes_s, seq_length)
         backlog_v = np.zeros(seq_length)
         latency_v = np.zeros(seq_length)  # Track latency (proportional to backlog)
@@ -219,7 +220,9 @@ class TraceGenerator:
             self.trace_data[data_set_name] = []
 
         for _ in range(num_samples):
-            trace_sample = self.generate_trace_sample(seq_length)
+            # if there are multiple link_properties, pick a random one
+            lp = random.choice(self.link_properties)
+            trace_sample = self.generate_trace_sample(lp, seq_length)
             input_features, output_features = self.feature_vector_from_sample(trace_sample)
             dataX.append(input_features)
             dataY.append(output_features)

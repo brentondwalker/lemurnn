@@ -134,7 +134,8 @@ class LatencyPredictor:
     def save_link_properties(self):
         link_properties_filename = f"{self.training_directory}/link-properties.json"
         with open(link_properties_filename, "w") as link_properties_file:
-                link_properties_file.write(json.dumps(dataclasses.asdict(self.trace_generator.link_properties)))
+            for lp in self.trace_generator.link_properties:
+                link_properties_file.write(json.dumps(dataclasses.asdict(lp)))
                 link_properties_file.write("\n")
 
     def set_data_directory(self, path):

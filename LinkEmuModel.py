@@ -17,7 +17,7 @@ class LinkEmuModel(nn.Module):
         self.hidden_size:int = hidden_size
         self.num_layers:int = num_layers
         self.learning_rate:float = learning_rate
-        self.dropout_rate = dropout_rate
+        self.dropout_rate:float = dropout_rate
         if loadpath:
             print(f"loading model from {loadpath}")
             self.load_model_properties(loadpath)

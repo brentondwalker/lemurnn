@@ -20,14 +20,10 @@ from TraceGenerator import TraceGenerator, LinkProperties, TraceSample
 
 class TraceGeneratorPacketQueue(TraceGenerator):
 
-    def __init__(self, link_properties: LinkProperties, input_str='bscq', output_str='bd', normalize=False):
+    def __init__(self, link_properties:list[LinkProperties], input_str='bscq', output_str='bd', normalize=False):
         super().__init__(link_properties, input_str, output_str)
         self.data_type = 'packetqueue'
         self.normalize = normalize
-        # we'll derive queue a queue size range by dividing the queue range in bytes by the max and min packet size
-        self.min_queue_size = int(self.link_properties.min_queue_bytes/self.link_properties.max_pkt_size)
-        self.max_queue_size = int(self.link_properties.max_queue_bytes/self.link_properties.min_pkt_size)
-
 
     def get_extra_dataset_properties(self):
         """
@@ -37,22 +33,26 @@ class TraceGeneratorPacketQueue(TraceGenerator):
         }
         return extra_dataset_properties
 
-    def generate_trace_sample(self, seq_length:int):
-        arrival_rate = np.random.uniform(self.link_properties.min_arrival_rate, self.link_properties.max_arrival_rate)
+    def generate_trace_sample(self, lp:LinkProperties, seq_length:int):
+        arrival_rate = np.random.uniform(lp.min_arrival_rate, lp.max_arrival_rate)
         inter_pkt_time = 1.0 / arrival_rate
         pkt_arrival_times_v = np.cumsum(np.random.exponential(inter_pkt_time, seq_length))
         pkt_size_v = np.rint(
-            np.random.uniform(self.link_properties.min_pkt_size, self.link_properties.max_pkt_size, seq_length))  # Packet size between 60 and 1000 bytes
-        capacity_s = np.random.uniform(self.link_properties.min_capacity, self.link_properties.max_capacity)
+            np.random.uniform(lp.min_pkt_size, lp.max_pkt_size, seq_length))  # Packet size between 60 and 1000 bytes
+        capacity_s = np.random.uniform(lp.min_capacity, lp.max_capacity)
         capacity_v = np.repeat(capacity_s, seq_length)  # Link capacity (bytes per unit time)
 
+        # we'll derive queue a queue size range by dividing the queue range in bytes by the max and min packet size
+        min_queue_size = int(lp.min_queue_bytes/lp.max_pkt_size)
+        max_queue_size = int(lp.max_queue_bytes/lp.min_pkt_size)
+
         # queue size of <= 0 indicates infinite queue
-        if self.link_properties.max_queue_bytes <= 0:
+        if lp.max_queue_bytes <= 0:
             # but we dont want to pass inf as one of the inputs, so set that to zero
             queue_size_s = np.inf
             queue_size_v = np.repeat(0, seq_length)
         else:
-            queue_size_s = np.rint(np.random.uniform(self.min_queue_size, self.max_queue_size))  # size of queue in bytes
+            queue_size_s = np.rint(np.random.uniform(min_queue_size, max_queue_size))  # size of queue in bytes
             queue_size_v = np.repeat(queue_size_s, seq_length)
         backlog_v = np.zeros(seq_length)
         latency_v = np.zeros(seq_length)  # Track latency (proportional to backlog)
@@ -95,10 +95,7 @@ class TraceGeneratorPacketQueue(TraceGenerator):
             np.insert(pkt_arrival_times_v, 0, 0))  # shouldnt this just give us back the inter_pkt_time_in?
 
         if self.normalize:
-            backlog_v /= self.link_properties.max_pkt_size
-            pkt_size_v /= self.link_properties.max_pkt_size
-            capacity_v /= self.link_properties.max_pkt_size
-            #queue_size_v /= self.max_queue_size    # ought we to normalize this?
+            print("WARNING: normalization no longer supported in this branch")
 
         return TraceSample(pkt_arrival_times_v, inter_pkt_times_v, pkt_size_v, backlog_v,
                             latency_v, capacity_v, queue_size_v, dropped_status,

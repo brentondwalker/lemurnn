@@ -10,7 +10,7 @@ from TraceGenerator import TraceGenerator, LinkProperties, TraceSample
 
 class TraceGeneratorCodel(TraceGenerator):
 
-    def __init__(self, link_properties: LinkProperties, input_str='bscq', output_str='bd', normalize=False, base_interval=10, codel_threshold=5):
+    def __init__(self, link_properties:list[LinkProperties], input_str='bscq', output_str='bd', normalize=False, base_interval=10, codel_threshold=5):
         super().__init__(link_properties, input_str, output_str)
         self.base_interval = base_interval   # [ms]
         self.codel_threshold = codel_threshold
@@ -29,7 +29,7 @@ class TraceGeneratorCodel(TraceGenerator):
         }
         return extra_dataset_properties
 
-    def generate_trace_sample(self, seq_length:int):
+    def generate_trace_sample(self, lp:LinkProperties, seq_length:int):
         base_interval = 10   # [ms]
         interval_denominator = 1
         codel_threshold = 5  # [ms]
@@ -39,16 +39,16 @@ class TraceGeneratorCodel(TraceGenerator):
         interval_min_latency = 0
 
         # compute the packet arrival rate [pkt/ms] to achieve the desired arrival rate
-        arrival_rate = np.random.uniform(self.link_properties.min_arrival_rate, self.link_properties.max_arrival_rate)
-        mean_pkt_size_kbyte = (self.link_properties.max_pkt_size + self.link_properties.min_pkt_size)/2
+        arrival_rate = np.random.uniform(lp.min_arrival_rate, lp.max_arrival_rate)
+        mean_pkt_size_kbyte = (lp.max_pkt_size + lp.min_pkt_size)/2
         pkt_arrival_rate_ms = arrival_rate/(8*mean_pkt_size_kbyte)
         inter_pkt_time_ms = 1.0 / pkt_arrival_rate_ms
         pkt_arrival_times_v = np.cumsum(np.random.exponential(inter_pkt_time_ms, seq_length))
         # if we measure packet size in KByte, then we can't round the size to integer values
-        pkt_size_v = np.random.uniform(self.link_properties.min_pkt_size, self.link_properties.max_pkt_size, seq_length)
-        capacity_s = np.random.uniform(self.link_properties.min_capacity, self.link_properties.max_capacity)
+        pkt_size_v = np.random.uniform(lp.min_pkt_size, lp.max_pkt_size, seq_length)
+        capacity_s = np.random.uniform(lp.min_capacity, lp.max_capacity)
         capacity_v = np.repeat(capacity_s, seq_length)  # Link capacity (bytes per unit time)
-        queue_bytes_s = np.rint(np.random.uniform(self.link_properties.min_queue_bytes, self.link_properties.max_queue_bytes))  # size of queue in bytes
+        queue_bytes_s = np.rint(np.random.uniform(lp.min_queue_bytes, lp.max_queue_bytes))  # size of queue in bytes
         queue_bytes_v = np.repeat(queue_bytes_s, seq_length)
         backlog_v = np.zeros(seq_length)
         latency_v = np.zeros(seq_length)  # Track latency (proportional to backlog)

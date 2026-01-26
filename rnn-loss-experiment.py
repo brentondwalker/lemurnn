@@ -3,12 +3,12 @@
 import argparse
 import sys
 
+from DropGRU import DropGRU
 from DropLSTM import DropLSTM
 from DropReluLSTM import DropReluLSTM
 from LinkEmuModel import LinkEmuModel
 from LinkProperties import link_properties_library
 from NonManualRNN import NonManualRNN
-from TraceGenerator import *
 from TraceGeneratorByteQueue import TraceGeneratorByteQueue
 from TraceGeneratorCodel import TraceGeneratorCodel
 from LatencyPredictor import *
@@ -22,7 +22,7 @@ def main():
     # configure:
     #num layers
     parser = argparse.ArgumentParser()
-    parser.add_argument('--link_properties', type=str, default='default')
+    parser.add_argument('--link_properties', type=str, action='append', default=None)
     parser.add_argument('--infinite_queue', action='store_true')
     parser.add_argument("-l", '--num_layers', type=int, default=1)
     parser.add_argument("-s", '--hidden_size', type=int, default=8)
@@ -44,13 +44,14 @@ def main():
     parser.add_argument('--tanh', action='store_true')
     parser.add_argument('--relu_lstm', action='store_true')
     parser.add_argument('--lstm', action='store_true')
+    parser.add_argument('--gru', action='store_true')
     parser.add_argument('--normalize', action='store_true')
     parser.add_argument('--multiloader', action='store_true')
     parser.add_argument('--drop_masking', action='store_true')
 
     args = parser.parse_args()
 
-    link_properties_str = args.link_properties
+    link_properties_strs = args.link_properties
     infinite_queue = args.infinite_queue
     num_layers = args.num_layers
     hidden_size = args.hidden_size
@@ -71,6 +72,7 @@ def main():
     earthmover = args.earthmover
     use_relu_lstm = args.relu_lstm
     use_lstm = args.lstm
+    use_gru = args.gru
     normalize = args.normalize
     multiloader = args.multiloader
     drop_masking = args.drop_masking
@@ -81,15 +83,18 @@ def main():
     if compute_ads_loss:
         ads_loss_interval = 100
 
-    link_properties = link_properties_library[link_properties_str]
+    if link_properties_strs == None:
+        link_properties_strs = ['default']
+    link_properties = [link_properties_library[lps] for lps in link_properties_strs]
     if infinite_queue:
-        link_properties.infinite_queue()
+        for lp in link_properties:
+            lp.infinite_queue()
 
     trace_generator = None
     if dag_data:
         # assign fixed value to packet size, because that will be used to re-sale the predictions
-        link_properties.max_pkt_size = 1000
-        link_properties.min_pkt_size = 1000
+        link_properties[0].max_pkt_size = 1000
+        link_properties[0].min_pkt_size = 1000
         trace_generator = TraceGeneratorDagData(link_properties, normalize=normalize, datadirs=dag_data)
     elif packetqueue:
         trace_generator = TraceGeneratorPacketQueue(link_properties, normalize=normalize)
@@ -116,7 +121,12 @@ def main():
                                           learning_rate=learning_rate, dropout_rate=dropout_rate)
     elif use_lstm:
         print("USING LSTM!!")
-        model:LinkEmuModel = DropLSTM(input_size=trace_generator.input_size(),
+        model: LinkEmuModel = DropLSTM(input_size=trace_generator.input_size(),
+                                       hidden_size=hidden_size, num_layers=num_layers,
+                                       learning_rate=learning_rate, dropout_rate=dropout_rate)
+    elif use_gru:
+        print("USING GRU!!")
+        model: LinkEmuModel = DropGRU(input_size=trace_generator.input_size(),
                                       hidden_size=hidden_size, num_layers=num_layers,
                                       learning_rate=learning_rate, dropout_rate=dropout_rate)
     else:
