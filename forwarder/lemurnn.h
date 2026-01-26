@@ -5,6 +5,7 @@
 #include <torch/torch.h>
 #include <string>
 #include <utility>
+#include <vector>
 
 class LEmuRnn {
 public:
@@ -62,7 +63,19 @@ public:
      * use the model to make a latency/drop prediciton.
      */
     PacketAction predict(double inter_packet_time_ms, double packet_size_kbyte);
-  
+
+    /**
+     * Advances the model state by the number of samples provided.
+     *
+     * @param inter_packet_times_ms Vector of time deltas.
+     * @param packet_sizes_kbyte Vector of packet sizes.
+     * @return Vector of PacketAction predictions corresponding to inputs.
+     */
+    std::vector<PacketAction> predictBatch(
+        const std::vector<double>& inter_packet_times_ms,
+        const std::vector<double>& packet_sizes_kbyte
+    );
+
 private:
     // the model hyperparams
     int num_layers_;

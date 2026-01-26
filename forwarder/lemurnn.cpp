@@ -123,3 +123,97 @@ LEmuRnn::PacketAction LEmuRnn::predict(double inter_packet_time_ms, double packe
     return pa;
 }
 
+/**
+ * Do inference on a batch of packets.
+ *
+ * @param inter_packet_times_ms
+ * @param packet_sizes_kbyte /
+ * @return
+ */
+std::vector<LEmuRnn::PacketAction> LEmuRnn::predictBatch(
+    const std::vector<double>& inter_packet_times_ms,
+    const std::vector<double>& packet_sizes_kbyte)
+{
+    // validate input
+    if (inter_packet_times_ms.size() != packet_sizes_kbyte.size()) {
+        throw std::runtime_error("predictBatch: Input vector sizes do not match.");
+    }
+
+    int BATCH_SIZE = 1;
+    int SEQ_LEN = inter_packet_times_ms.size();
+    int INPUT_SIZE = 4;
+
+    if (SEQ_LEN == 0) {
+        return {};
+    }
+
+    // build the input tensor with shape (1, SEQ_LEN, 4)
+    torch::Tensor x = torch::zeros({BATCH_SIZE, SEQ_LEN, INPUT_SIZE});
+    auto xa = x.accessor<float, 3>(); // Accessor for efficient filling
+
+    for (int t = 0; t < SEQ_LEN; ++t) {
+        xa[0][t][0] = inter_packet_times_ms[t] * capacity_ / 8.0; // kbit processed
+        xa[0][t][1] = packet_sizes_kbyte[t];
+        xa[0][t][2] = capacity_;
+        xa[0][t][3] = queue_size_;
+    }
+
+    // prepare inputs for TorchScript
+    std::vector<torch::jit::IValue> inputs;
+    inputs.push_back(x.to(device_));
+
+    if (is_lstm_) {
+        inputs.push_back(lstm_hidden_);
+    } else {
+        inputs.push_back(hidden_);
+    }
+
+    // batch inference
+    // The model processes the whole sequence and returns the sequence of outputs
+    // plus the FINAL hidden state.
+    auto output_tuple = module.forward(inputs).toTuple();
+
+    torch::Tensor backlog_tensor = output_tuple->elements()[0].toTensor();
+    torch::Tensor drop_tensor = output_tuple->elements()[1].toTensor();
+
+    // update hidden state (Persist state after the last item in batch)
+    if (is_lstm_) {
+        auto hidden_tuple_ptr = output_tuple->elements()[2].toTuple();
+        hidden_ = hidden_tuple_ptr->elements()[0].toTensor();
+        cell_state_ = hidden_tuple_ptr->elements()[1].toTensor();
+        lstm_hidden_ = std::make_tuple(hidden_, cell_state_);
+    } else {
+        hidden_ = output_tuple->elements()[2].toTensor();
+    }
+
+    // extract results
+    // backlog_tensor shape is likely (1, SEQ_LEN, 1)
+    // drop_tensor shape is likely (1, SEQ_LEN, 2)
+
+    // Move tensors to CPU for easier element access if they were on GPU
+    backlog_tensor = backlog_tensor.to(torch::kCPU);
+    drop_tensor = drop_tensor.to(torch::kCPU);
+
+    std::vector<PacketAction> results;
+    results.reserve(SEQ_LEN);
+
+    // Accessors for reading outputs
+    auto backlog_acc = backlog_tensor.accessor<float, 3>();
+    // Note: drop_tensor might need to be argmaxed first, or accessed directly.
+    // Assuming standard classification output (batch, seq, logits)
+
+    for (int t = 0; t < SEQ_LEN; ++t) {
+        // [KB]/[KB/ms] = [ms]
+        double latency_ms = backlog_acc[0][t][0] / capacity_;
+
+        // Handle Drop prediction
+        // We select the t-th step, 0-th batch index.
+        // Slice: drop_tensor[0][t] gives a 1D tensor of logits
+        bool drop = (bool)torch::argmax(drop_tensor[0][t]).item().toInt();
+
+        // implicitly instantiates a PacketAction?
+        results.push_back({latency_ms, drop});
+    }
+
+    return results;
+}

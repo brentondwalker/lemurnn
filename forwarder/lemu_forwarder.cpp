@@ -312,19 +312,25 @@ static int prediction_thread_main(void *arg) {
     while (!force_quit) {
         nb_dq = rte_ring_sc_dequeue_burst(ring_in, (void **)bufs, BURST_SIZE, NULL);
         if (nb_dq == 0) continue;
-	if (nb_dq > 1) {
-	  std::cout << "PREDICTION thread dequeued: " << nb_dq << std::endl;
-	}
+        if (nb_dq > 1) {
+            std::cout << "PREDICTION thread dequeued: " << nb_dq << std::endl;
+        }
 
+        // Extract the inter-packet times and sizes to vectors.
+        // This means all the values get copied twice.  Once here, and again
+        // in the predict() function.
+        std::vector<uint64_t> arrival_tsc_vec;
+        std::vector<uint64_t> inter_packet_times_tsc;
+        std::vector<double> inter_packet_times_ms;
+        std::vector<double> packet_sizes_kbyte;
         for (i = 0; i < nb_dq; i++) {
             uint64_t arrival_tsc = *TIMESTAMP_FIELD(bufs[i]);
+            arrival_tsc_vec.push_back(arrival_tsc);
             uint16_t size_byte = rte_pktmbuf_pkt_len(bufs[i]);
-            double size_kbyte = ((double)size_byte)/1000.0;
+            packet_sizes_kbyte.push_back(((double)size_byte)/1000.0);
+
             uint64_t inter_packet_time_tsc = arrival_tsc - last_packet_time_tsc;
             double inter_packet_time_ms = 1000.0*((double)inter_packet_time_tsc)/tsc_rate;
-            double arrival_ms = 1000.0*((double)(arrival_tsc-start_time_tsc))/tsc_rate;
-            uint64_t send_time_tsc = 0;
-
             // When the program first starts, or if the link has been idle for awhile, 
             // the inter-packet time will be way outside the range the model has been
             // trained for.  In these cases, assume the system is empty anyway and
@@ -335,17 +341,21 @@ static int prediction_thread_main(void *arg) {
                 inter_packet_time_ms = 0.0;
                 //XXX should we also reset the model hidden state?
             }
-            double processed_kbit = inter_packet_time_ms * capacity;
+            inter_packet_times_tsc.push_back(inter_packet_time_tsc);
+            inter_packet_times_ms.push_back(inter_packet_time_ms);
+            last_packet_time_tsc = arrival_tsc;
+        }
 
-            //std::cout << "packet prediction: " << inter_packet_time_ms
-            //     << "\t" << size_kbyte << std::endl;
-            //LEmuRnn::PacketAction pa = {1.5, true};
+        // do the prediction for all dequeued packets in batch mode
+        prediction_timer = rte_rdtsc();
+        std::vector<LEmuRnn::PacketAction> pa_vec = model.predictBatch(inter_packet_times_ms, packet_sizes_kbyte);
+        prediction_time_ms = 1000.0*(((double)(rte_rdtsc() - prediction_timer))/tsc_rate);
+        std::cout << "\tprediction took ms: " << prediction_time_ms << std::endl;
 
-            prediction_timer = rte_rdtsc();
-            LEmuRnn::PacketAction pa = model.predict(inter_packet_time_ms, size_kbyte);
-            prediction_time_ms = 1000.0*(((double)(rte_rdtsc() - prediction_timer))/tsc_rate);
-            //std::cout << "\tprediction took ms: " << prediction_time_ms << std::endl;
-            packets_total += 1;
+        for (i = 0; i < nb_dq; i++) {
+            LEmuRnn::PacketAction pa = pa_vec[i];
+            double arrival_ms = 1000.0*((double)(arrival_tsc_vec[i] - start_time_tsc))/tsc_rate;
+            uint64_t send_time_tsc = 0;
             if (pa.drop) {
                 packets_dropped += 1;
                 num_drops++;  // local version.  Should entfern the other one.
@@ -354,7 +364,8 @@ static int prediction_thread_main(void *arg) {
             } else {
                 std::cout << "\tPacket Action: " << pa.latency_ms
                           << "\t" << pa.drop << "\t" << prediction_time_ms << std::endl;
-                send_time_tsc = arrival_tsc + (uint64_t)(pa.latency_ms * tsc_rate / 1000.0);
+
+                send_time_tsc = arrival_tsc_vec[i] + (uint64_t)(pa.latency_ms * tsc_rate / 1000.0);
                 //uint64_t send_time_tsc = arrival_tsc + (uint64_t)(pa.latency_ms * 1.0);
                 //std::cout << arrival_tsc << "\t" << inter_packet_time_tsc  << "\t" << inter_packet_time_ms
                 //          << "\t" << pa.latency_ms << "\t" << send_time_tsc << std::endl;
@@ -379,29 +390,28 @@ static int prediction_thread_main(void *arg) {
             // - receive_time [epoch seconds, float, 0 if dropped]
             // - latency [seconds, float]
             // - dropped_status [1 or 0]
-            // 
+            //
+            double processed_kbit = inter_packet_times_ms[i] * capacity;
             if (data_save_file.is_open()) {
                 data_save_file << packet_count << "\t"
-                               << size_byte << "\t"
+                               << packet_sizes_kbyte[i]*1000 << "\t"
                                << (arrival_ms/1000.0) << "\t"
                                << ((arrival_ms + pa.latency_ms)/1000.0) << "\t"
                                << (pa.latency_ms/1000.0) << "\t"
                                << pa.drop << "\t"
-                               << inter_packet_time_ms << "\t"
+                               << inter_packet_times_ms[i] << "\t"
                                << processed_kbit << "\t"
-                               << size_byte << "\t"
+                               << packet_sizes_kbyte[i]*1000 << "\t"
                                << pa.latency_ms << "\t"
-                               << prediction_time_ms << "\t"
+                               << prediction_time_ms/nb_dq << "\t"  // prediction time per packet
                                << num_drops << "\t"
-                               << arrival_tsc << "\t"
+                               << arrival_tsc_vec[i] << "\t"
                                << arrival_ms << "\t"
-                               << inter_packet_time_tsc << "\t"
-                               << size_kbyte << "\t"
+                               << inter_packet_times_tsc[i] << "\t"
+                               << packet_sizes_kbyte[i] << "\t"
                                << send_time_tsc << std::endl;
             }
             packet_count++;
-            
-            last_packet_time_tsc = arrival_tsc;
         }
     }
     
