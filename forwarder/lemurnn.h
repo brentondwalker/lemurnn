@@ -76,10 +76,17 @@ public:
         const std::vector<double>& packet_sizes_kbyte
     );
 
+    int getMaxBatchSize() const {
+        return max_batch_size_;
+    }
+
 private:
     // the model hyperparams
     int num_layers_;
     int hidden_size_;
+
+    // maximum batch size for batch inference
+    int max_batch_size_ = 256;
     
     // if this model is an LSTM, it needs a hidden and cell state
     bool is_lstm_;
@@ -87,6 +94,11 @@ private:
     // the hidden state tensor
     torch::Tensor hidden_;
     torch::Tensor cell_state_;
+
+    // For batch inference we'll pre-allocate a large tensor of max_batch_size_
+    // and re-write and narrow() it for every round.
+    torch::Tensor x_batch;
+    //torch::TensorAccessor<float, 3> xa_batch;
     
     // the hidden state in the case of LSTM
     std::tuple<torch::Tensor,torch::Tensor> lstm_hidden_;

@@ -27,6 +27,13 @@ LEmuRnn::LEmuRnn(const std::string& model_path, int num_layers, int hidden_size,
         cell_state_ = torch::zeros({num_layers_, BATCH_SIZE, hidden_size_}).to(device_);
         lstm_hidden_ = std::make_tuple(hidden_, cell_state_);
     }
+
+    // pre-allocate a big tenor for batch inference
+    // build the input tensor with shape (1, SEQ_LEN, 4)
+    int SEQ_LEN = max_batch_size_;
+    int INPUT_SIZE = 4;
+    x_batch = torch::zeros({BATCH_SIZE, SEQ_LEN, INPUT_SIZE});
+    //xa_batch = x_batch.accessor<float, 3>();      // Accessor for efficient filling
 }
 
 void LEmuRnn::resetHiddenState() {
@@ -124,7 +131,7 @@ LEmuRnn::PacketAction LEmuRnn::predict(double inter_packet_time_ms, double packe
 }
 
 /**
- * Do inference on a batch of packets.
+ * Do inference on a batch/sequence of packets.
  *
  * @param inter_packet_times_ms
  * @param packet_sizes_kbyte /
@@ -147,20 +154,21 @@ std::vector<LEmuRnn::PacketAction> LEmuRnn::predictBatch(
         return {};
     }
 
-    // build the input tensor with shape (1, SEQ_LEN, 4)
-    torch::Tensor x = torch::zeros({BATCH_SIZE, SEQ_LEN, INPUT_SIZE});
-    auto xa = x.accessor<float, 3>(); // Accessor for efficient filling
+    // build the input tensor with shape (1, SEQ_LEN, INPUT_SIZE)
+    //torch::Tensor x = torch::zeros({BATCH_SIZE, SEQ_LEN, INPUT_SIZE});
+    //auto xa = x.accessor<float, 3>(); // Accessor for efficient filling
+    auto xa_batch = x_batch.accessor<float, 3>(); // Accessor for efficient filling
 
     for (int t = 0; t < SEQ_LEN; ++t) {
-        xa[0][t][0] = inter_packet_times_ms[t] * capacity_ / 8.0; // kbit processed
-        xa[0][t][1] = packet_sizes_kbyte[t];
-        xa[0][t][2] = capacity_;
-        xa[0][t][3] = queue_size_;
+        xa_batch[0][t][0] = inter_packet_times_ms[t] * capacity_ / 8.0; // kbit processed
+        xa_batch[0][t][1] = packet_sizes_kbyte[t];
+        xa_batch[0][t][2] = capacity_;
+        xa_batch[0][t][3] = queue_size_;
     }
 
     // prepare inputs for TorchScript
     std::vector<torch::jit::IValue> inputs;
-    inputs.push_back(x.to(device_));
+    inputs.push_back(x_batch.narrow(1,0,SEQ_LEN).to(device_));
 
     if (is_lstm_) {
         inputs.push_back(lstm_hidden_);
