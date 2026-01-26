@@ -12,6 +12,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3")
 
+list(APPEND CMAKE_PREFIX_PATH "./libtorch/")
+
 # package dependencies
 find_package(PkgConfig REQUIRED)
 find_package(Torch REQUIRED)
