@@ -4,10 +4,10 @@
 #include <stdexcept>
 
 LEmuRnn::LEmuRnn(const std::string& model_path, int num_layers, int hidden_size,
-		 double capacity, double queue_size, bool is_lstm)
+		 double capacity, double queue_size, bool is_lstm, int max_burst_size)
   : device_(torch::kCPU), num_layers_(num_layers), hidden_size_(hidden_size),
-    capacity_(capacity), queue_size_(queue_size), is_lstm_(is_lstm)
-{    
+    capacity_(capacity), queue_size_(queue_size), is_lstm_(is_lstm), max_batch_size_(max_burst_size)
+{
     try {
         module = torch::jit::load(model_path);
         module.to(device_);
@@ -35,6 +35,11 @@ LEmuRnn::LEmuRnn(const std::string& model_path, int num_layers, int hidden_size,
     x_batch = torch::zeros({BATCH_SIZE, SEQ_LEN, INPUT_SIZE});
     //xa_batch = x_batch.accessor<float, 3>();      // Accessor for efficient filling
 }
+
+int LEmuRnn::getMaxBatchSize() {
+    return max_batch_size_;
+}
+
 
 void LEmuRnn::resetHiddenState() {
     if (is_lstm_) {

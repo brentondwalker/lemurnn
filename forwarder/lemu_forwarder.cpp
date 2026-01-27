@@ -35,7 +35,7 @@
 // The LEmuRnn class for predicting packet handling based on a trained model.
 #include "lemurnn.h"
 
-#define BURST_SIZE 32
+#define BURST_SIZE 64
 #define NUM_MBUFS 8191 * 2 // Increased pool size for buffering in 4 rings
 #define MBUF_CACHE_SIZE 250
 #define RING_SIZE 16384
@@ -266,7 +266,7 @@ static int prediction_thread_main(void *arg) {
     if (model_type == "lstm" || model_type == "LSTM") {
         is_lstm = true;
     }
-    LEmuRnn model(model_file, num_layers, hidden_size, capacity, queue_size, is_lstm);
+    LEmuRnn model(model_file, num_layers, hidden_size, capacity, queue_size, is_lstm, BURST_SIZE);
     
     // file to write info about packet arrivals and actions
     std::ofstream data_save_file;
@@ -277,25 +277,25 @@ static int prediction_thread_main(void *arg) {
             std::cerr << "Error: Could not open file " << data_save_filename << " for writing." << std::endl;
             return 1;
         } else {
-	  data_save_file << "packet_number\t"
-			 << "size\t"
-			 << "transmit_time\t"
-			 << "receive_time\t"
-			 << "latency\t"
-			 << "dropped_status\t"
-			 << "inter_packet_time_ms\t"
-			 << "processed_kbit\t"
-			 << "size_byte\t"
-			 << "pa.latency_ms\t"
-			 << "prediction_time_ms\t"
-			 << "prediction_batch_size\t"
-			 << "num_drops\t"
-			 << "arrival_tsc\t"
-			 << "arrival_ms\t"
-			 << "inter_packet_time_tsc\t"
-			 << "size_kbyte\t"
-			 << "send_time_tsc" << std::endl;
-	}
+            data_save_file << "packet_number\t"
+                    << "size\t"
+                    << "transmit_time\t"
+                    << "receive_time\t"
+                    << "latency\t"
+                    << "dropped_status\t"
+                    << "inter_packet_time_ms\t"
+                    << "processed_kbit\t"
+                    << "size_byte\t"
+                    << "pa.latency_ms\t"
+                    << "prediction_time_ms\t"
+                    << "prediction_batch_size\t"
+                    << "num_drops\t"
+                    << "arrival_tsc\t"
+                    << "arrival_ms\t"
+                    << "inter_packet_time_tsc\t"
+                    << "size_kbyte\t"
+                    << "send_time_tsc" << std::endl;
+        }
     }
     // need to keep track of the arrival time of the last packet
     uint64_t last_packet_time_tsc = 0;

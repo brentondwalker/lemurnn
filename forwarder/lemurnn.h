@@ -15,7 +15,7 @@ public:
      * @param device The torch::Device to run the model on (e.g., torch::kCPU or torch::kCUDA).
      */
     LEmuRnn(const std::string& model_path, int num_layers, int hidden_size,
-	        double capacity, double queue_size, bool is_lstm=false);
+	        double capacity, double queue_size, bool is_lstm=false, int max_burst_size=32);
 
     /**
      * Set/change the device of the model.
@@ -26,6 +26,12 @@ public:
      * Use the GPU if available.
      */
     void useGPU();
+
+    /**
+     * Get the maximum size burst of packets that can be passed into to predictBatch().
+     * @return
+     */
+    int getMaxBatchSize();
 
     /**
      * The hidden state is initialized to zeros at instantiation.
@@ -76,17 +82,13 @@ public:
         const std::vector<double>& packet_sizes_kbyte
     );
 
-    int getMaxBatchSize() const {
-        return max_batch_size_;
-    }
-
 private:
     // the model hyperparams
     int num_layers_;
     int hidden_size_;
 
     // maximum batch size for batch inference
-    int max_batch_size_ = 256;
+    int max_batch_size_ = 1;
     
     // if this model is an LSTM, it needs a hidden and cell state
     bool is_lstm_;
