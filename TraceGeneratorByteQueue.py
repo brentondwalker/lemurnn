@@ -18,10 +18,6 @@ from torch.utils.data import DataLoader, TensorDataset
 
 from TraceGenerator import TraceGenerator, LinkProperties, TraceSample
 from TrafficGenerator import TrafficGenerator, PacketInfo
-from TrafficGeneratorCBR import TrafficGeneratorCBR
-from TrafficGeneratorExponential import TrafficGeneratorExponential
-
-
 
 class TraceGeneratorByteQueue(TraceGenerator):
 

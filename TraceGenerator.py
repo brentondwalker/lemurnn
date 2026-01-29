@@ -14,6 +14,11 @@ import torch.utils.data as data
 from torch.utils.data import DataLoader, TensorDataset
 from LinkProperties import LinkProperties
 
+# need to import these to invoke their __init_subclass__(), even though  they are not used by name.
+from TrafficGeneratorCBR import TrafficGeneratorCBR
+from TrafficGeneratorBurstyCBR import TrafficGeneratorBurstyCBR
+from TrafficGeneratorExponential import TrafficGeneratorExponential
+
 
 @dataclass
 class TraceSample:
