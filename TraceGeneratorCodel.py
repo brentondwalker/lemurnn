@@ -3,15 +3,17 @@ TraceGenerator
 Generate synthetic network data.
 """
 import json
+from collections import deque
 
 import numpy as np
 from TraceGenerator import TraceGenerator, LinkProperties, TraceSample
+from TrafficGenerator import TrafficGenerator, PacketInfo
 
 
 class TraceGeneratorCodel(TraceGenerator):
 
-    def __init__(self, link_properties:list[LinkProperties], input_str='bscq', output_str='bd', normalize=False, base_interval=10, codel_threshold=5):
-        super().__init__(link_properties, input_str, output_str)
+    def __init__(self, link_properties:list[LinkProperties], input_str='bscq', output_str='bd', normalize=False, base_interval=10, codel_threshold=5, traffic_types=None):
+        super().__init__(link_properties, input_str, output_str, traffic_types=traffic_types)
         self.base_interval = base_interval   # [ms]
         self.codel_threshold = codel_threshold
         self.interval_denominator = 1
@@ -29,7 +31,7 @@ class TraceGeneratorCodel(TraceGenerator):
         }
         return extra_dataset_properties
 
-    def generate_trace_sample(self, lp:LinkProperties, seq_length:int):
+    def generate_trace_sample(self, lp:LinkProperties, traffic_type, seq_length:int):
         base_interval = 10   # [ms]
         interval_denominator = 1
         codel_threshold = 5  # [ms]
@@ -38,29 +40,48 @@ class TraceGeneratorCodel(TraceGenerator):
         interval_end = interval_start + base_interval / np.sqrt(interval_denominator)
         interval_min_latency = 0
 
-        # compute the packet arrival rate [pkt/ms] to achieve the desired arrival rate
-        arrival_rate = np.random.uniform(lp.min_arrival_rate, lp.max_arrival_rate)
-        mean_pkt_size_kbyte = (lp.max_pkt_size + lp.min_pkt_size)/2
-        pkt_arrival_rate_ms = arrival_rate/(8*mean_pkt_size_kbyte)
-        inter_pkt_time_ms = 1.0 / pkt_arrival_rate_ms
-        pkt_arrival_times_v = np.cumsum(np.random.exponential(inter_pkt_time_ms, seq_length))
-        # if we measure packet size in KByte, then we can't round the size to integer values
-        pkt_size_v = np.random.uniform(lp.min_pkt_size, lp.max_pkt_size, seq_length)
+        # sample the properties of the link (capacity and queue size)
         capacity_s = np.random.uniform(lp.min_capacity, lp.max_capacity)
         capacity_v = np.repeat(capacity_s, seq_length)  # Link capacity (bytes per unit time)
+
+
         queue_bytes_s = np.rint(np.random.uniform(lp.min_queue_bytes, lp.max_queue_bytes))  # size of queue in bytes
         queue_bytes_v = np.repeat(queue_bytes_s, seq_length)
+
+        # In case an inter-packet interval leaves us in the middle of a packet overhead
+        #XXX pkt overhead is not implemented on this link type yet!!
+        remaining_overhead_kbytes = 0
+
+        # we generate the packets one by one and compute how the link handles them
+        tg = TrafficGenerator.create(lp, traffic_type)
+        pkt_arrival_times_v = np.zeros(seq_length)
+        pkt_size_v = np.zeros(seq_length)
+
+        dropped_sizes = []  # Store dropped packet sizes
+        dropped_indices = []  # Store the indices of dropped packets
+        dropped_status = np.zeros(seq_length, dtype=int)
+
+        backlog_v = np.zeros(seq_length)
+        latency_v = np.zeros(seq_length)  # Track latency (proportional to backlog)
+        pkt_info: PacketInfo = tg.next_packet()
+        queue_kbytes = pkt_info.size_kbyte  # Current queue length in kbytes
+        queue_pkts = deque([pkt_info.size_kbyte])
+        total_kbytes_sent = pkt_info.size_kbyte
+
+        backlog_v[0] = queue_kbytes  #XXX not implemented yet:  + lp.overhead_bytes
+        latency_v[0] = backlog_v[0] * 8 / capacity_s   # [KByte]*[bit/Byte]/[KBit/ms] = [ms]
+        pkt_arrival_times_v[0] = pkt_info.tx_time_ms
+
         backlog_v = np.zeros(seq_length)
         latency_v = np.zeros(seq_length)  # Track latency (proportional to backlog)
         queue = pkt_size_v[0]  # Current queue size in bytes
         backlog_v[0] = queue
         latency_v[0] = queue * 8 / capacity_s   # [KByte]*[bit/Byte]/[KBit/ms] = [ms]
 
-        dropped_sizes = []  # Store dropped packet sizes
-        dropped_indices = []  # Store the indices of dropped packets
-        dropped_status = np.zeros(seq_length, dtype=int)
-
         for i in range(1, seq_length):
+            pkt_info:PacketInfo = tg.next_packet(latency_v[i-1], dropped_status[i-1])
+            pkt_arrival_times_v[i] = pkt_info.tx_time_ms
+            pkt_size_v[i] = pkt_info.size_kbyte
             time_passed_ms = pkt_arrival_times_v[i] - pkt_arrival_times_v[i - 1]  # Time between packets
             current_time += time_passed_ms
 

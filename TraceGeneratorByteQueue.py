@@ -65,7 +65,6 @@ class TraceGeneratorByteQueue(TraceGenerator):
         dropped_indices = []  # Store the indices of dropped packets
         dropped_status = np.zeros(seq_length, dtype=int)
 
-
         backlog_v = np.zeros(seq_length)
         latency_v = np.zeros(seq_length)  # Track latency (proportional to backlog)
         pkt_info: PacketInfo = tg.next_packet()

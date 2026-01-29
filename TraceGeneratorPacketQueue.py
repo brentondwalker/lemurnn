@@ -78,7 +78,7 @@ class TraceGeneratorPacketQueue(TraceGenerator):
         queue_pkts = deque([pkt_info.size_kbyte])
         total_kbytes_sent = pkt_info.size_kbyte
 
-        backlog_v[0] = queue_kbytes + lp.overhead_bytes
+        backlog_v[0] = queue_kbytes   #XXX not implemented yet: + lp.overhead_bytes
         latency_v[0] = backlog_v[0] * 8 / capacity_s   # [KByte]*[bit/Byte]/[KBit/ms] = [ms]
         pkt_arrival_times_v[0] = pkt_info.tx_time_ms
 
