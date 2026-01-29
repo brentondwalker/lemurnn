@@ -25,8 +25,8 @@ from TrafficGeneratorExponential import TrafficGeneratorExponential
 
 class TraceGeneratorByteQueue(TraceGenerator):
 
-    def __init__(self, link_properties:list[LinkProperties], input_str='bscq', output_str='bd', normalize=False):
-        super().__init__(link_properties, input_str, output_str)
+    def __init__(self, link_properties:list[LinkProperties], input_str='bscq', output_str='bd', normalize=False, traffic_types=None):
+        super().__init__(link_properties, input_str, output_str, traffic_types=traffic_types)
         self.data_type = 'bytequeue'
         self.normalize = normalize
 
@@ -38,7 +38,7 @@ class TraceGeneratorByteQueue(TraceGenerator):
         }
         return extra_dataset_properties
 
-    def generate_trace_sample(self, lp:LinkProperties, seq_length:int):
+    def generate_trace_sample(self, lp:LinkProperties, traffic_type, seq_length:int):
 
         # sample the properties of the link (capacity and queue size)
         capacity_s = np.random.uniform(lp.min_capacity, lp.max_capacity)
@@ -62,7 +62,7 @@ class TraceGeneratorByteQueue(TraceGenerator):
         remaining_overhead_kbytes = 0
 
         # we generate the packets one by one and compute how the link handles them
-        tg = TrafficGenerator.create(lp)
+        tg = TrafficGenerator.create(lp, traffic_type)
         pkt_arrival_times_v = np.zeros(seq_length)
         pkt_size_v = np.zeros(seq_length)
 

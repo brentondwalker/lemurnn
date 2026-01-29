@@ -23,6 +23,7 @@ def main():
     #num layers
     parser = argparse.ArgumentParser()
     parser.add_argument('--link_properties', type=str, action='append', default=None)
+    parser.add_argument('--traffic', type=str, action='append', default=None)
     parser.add_argument('--infinite_queue', action='store_true')
     parser.add_argument("-l", '--num_layers', type=int, default=1)
     parser.add_argument("-s", '--hidden_size', type=int, default=8)
@@ -53,6 +54,7 @@ def main():
 
     link_properties_strs = args.link_properties
     infinite_queue = args.infinite_queue
+    traffic_types = args.traffic
     num_layers = args.num_layers
     hidden_size = args.hidden_size
     num_epochs = args.num_epochs
@@ -83,26 +85,30 @@ def main():
     if compute_ads_loss:
         ads_loss_interval = 100
 
-    if link_properties_strs == None:
+    if link_properties_strs is None:
         link_properties_strs = ['default']
     link_properties = [link_properties_library[lps] for lps in link_properties_strs]
     if infinite_queue:
         for lp in link_properties:
             lp.infinite_queue()
+    if traffic_types is None:
+        traffic_types = ['exponential']
 
     trace_generator = None
     if dag_data:
-        # assign fixed value to packet size, because that will be used to re-sale the predictions
+        # assign fixed value to packet size, because that will be used to rescale the predictions
         link_properties[0].max_pkt_size = 1000
         link_properties[0].min_pkt_size = 1000
         trace_generator = TraceGeneratorDagData(link_properties, normalize=normalize, datadirs=dag_data)
-    elif packetqueue:
-        trace_generator = TraceGeneratorPacketQueue(link_properties, normalize=normalize)
-    elif codel:
-        trace_generator = TraceGeneratorCodel(link_properties, normalize=normalize, base_interval=10, codel_threshold=5)
     else:
-        #trace_generator = TraceGenerator(link_properties, normalize=normalize)
-        trace_generator = TraceGeneratorByteQueue(link_properties, normalize=normalize)
+        if packetqueue:
+            trace_generator = TraceGeneratorPacketQueue(link_properties, normalize=normalize)
+        elif codel:
+            trace_generator = TraceGeneratorCodel(link_properties, normalize=normalize, base_interval=10, codel_threshold=5)
+        else:
+            # default is ByteQueue
+            # trace_generator = TraceGenerator(link_properties, normalize=normalize)
+            trace_generator = TraceGeneratorByteQueue(link_properties, normalize=normalize)
 
     if multiloader:
         trace_generator.create_multiloaders(1024*kilo_training_samples, [4, 8, 16, 32, 64, 128, 256],

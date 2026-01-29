@@ -12,7 +12,7 @@ from LinkProperties import LinkProperties, link_properties_library
 
 @dataclass
 class PacketInfo:
-    size_kbyte: int
+    size_kbyte: float
     tx_time_ms: float
     inter_packet_time_ms: float
 
@@ -39,8 +39,8 @@ class TrafficGenerator(ABC):
         #    self.traffic_generator = SUBCLASS_MAPPING[link_properties.traffic_generator](link_properties)
 
     @staticmethod
-    def create(link_properties:LinkProperties):
-        return TrafficGenerator._registry[link_properties.traffic_generator](link_properties)
+    def create(link_properties:LinkProperties, traffic_type):
+        return TrafficGenerator._registry[traffic_type](link_properties)
 
     @abstractmethod
     def next_packet(self, last_latency:float=0.0, last_drop:bool=False):

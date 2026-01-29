@@ -31,11 +31,12 @@ class TraceSample:
 
 class TraceGenerator:
 
-    def __init__(self, link_properties:list[LinkProperties], input_str='bscq', output_str='bd', normalize=False):
+    def __init__(self, link_properties:list[LinkProperties], input_str='bscq', output_str='bd', normalize=False, traffic_types=None):
         self.link_properties:list[LinkProperties] = link_properties
         self.input_str = input_str
         self.output_str = output_str
         self.normalize = normalize
+        self.traffic_types = traffic_types
         self.data_type = 'bytequeue'
         self.seed = None
         self.test_seed = None
@@ -99,7 +100,7 @@ class TraceGenerator:
         return len(self.output_str)
 
 
-    def generate_trace_sample(self, lp:LinkProperties, seq_length:int):
+    def generate_trace_sample(self, lp:LinkProperties, traffic_type, seq_length:int):
         # compute the packet arrival rate [pkt/ms] to achieve the desired arrival rate
         arrival_rate = np.random.uniform(lp.min_arrival_rate, lp.max_arrival_rate)
         mean_pkt_size_kbyte = (lp.max_pkt_size + lp.min_pkt_size)/2
@@ -221,8 +222,12 @@ class TraceGenerator:
 
         for _ in range(num_samples):
             # if there are multiple link_properties, pick a random one
-            lp = random.choice(self.link_properties)
-            trace_sample = self.generate_trace_sample(lp, seq_length)
+            lp:LinkProperties = random.choice(self.link_properties)
+            # we default to the traffic generator in the link_properties, unless one was specified
+            traffic_type = lp.traffic_generator
+            if self.traffic_types:
+                traffic_type = random.choice(self.traffic_types)
+            trace_sample = self.generate_trace_sample(lp, traffic_type, seq_length)
             input_features, output_features = self.feature_vector_from_sample(trace_sample)
             dataX.append(input_features)
             dataY.append(output_features)
