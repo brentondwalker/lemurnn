@@ -53,11 +53,6 @@ class TraceGeneratorByteQueue(TraceGenerator):
             queue_size_s = np.rint(np.random.uniform(lp.min_queue_bytes, lp.max_queue_bytes))
             queue_size_v = np.repeat(queue_size_s, seq_length)
 
-        # In order to model the per-packet overhead of ethernet (or other networks)
-        # we need to track how many packets are in the queue
-        # These overhead bytes take up time on the link, but not space in the queue
-        queued_packets = 0
-
         # In case an inter-packet interval leaves us in the middle of a packet overhead
         remaining_overhead_kbytes = 0
 
@@ -83,7 +78,7 @@ class TraceGeneratorByteQueue(TraceGenerator):
         pkt_arrival_times_v[0] = pkt_info.tx_time_ms
 
         for i in range(1,seq_length):
-            pkt_info:PacketInfo = tg.next_packet()
+            pkt_info:PacketInfo = tg.next_packet(latency_v[i-1], dropped_status[i-1])
             pkt_arrival_times_v[i] = pkt_info.tx_time_ms
             pkt_size_v[i] = pkt_info.size_kbyte
             time_passed_ms = pkt_arrival_times_v[i] - pkt_arrival_times_v[i - 1]  # Time between packets

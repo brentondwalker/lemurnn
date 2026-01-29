@@ -91,8 +91,9 @@ def main():
     if infinite_queue:
         for lp in link_properties:
             lp.infinite_queue()
-    if traffic_types is None:
-        traffic_types = ['exponential']
+    #if traffic_types is None:
+    #    print("Using default traffic type of exponential")
+    #    traffic_types = ['exponential']
 
     trace_generator = None
     if dag_data:
@@ -102,13 +103,13 @@ def main():
         trace_generator = TraceGeneratorDagData(link_properties, normalize=normalize, datadirs=dag_data)
     else:
         if packetqueue:
-            trace_generator = TraceGeneratorPacketQueue(link_properties, normalize=normalize)
+            trace_generator = TraceGeneratorPacketQueue(link_properties, normalize=normalize, traffic_types=traffic_types)
         elif codel:
             trace_generator = TraceGeneratorCodel(link_properties, normalize=normalize, base_interval=10, codel_threshold=5)
         else:
             # default is ByteQueue
             # trace_generator = TraceGenerator(link_properties, normalize=normalize)
-            trace_generator = TraceGeneratorByteQueue(link_properties, normalize=normalize)
+            trace_generator = TraceGeneratorByteQueue(link_properties, normalize=normalize, traffic_types=traffic_types)
 
     if multiloader:
         trace_generator.create_multiloaders(1024*kilo_training_samples, [4, 8, 16, 32, 64, 128, 256],

@@ -16,12 +16,13 @@ import torch.utils.data as data
 from torch.utils.data import DataLoader, TensorDataset
 
 from TraceGenerator import TraceGenerator, LinkProperties, TraceSample
+from TrafficGenerator import TrafficGenerator, PacketInfo
 
 
 class TraceGeneratorPacketQueue(TraceGenerator):
 
-    def __init__(self, link_properties:list[LinkProperties], input_str='bscq', output_str='bd', normalize=False):
-        super().__init__(link_properties, input_str, output_str)
+    def __init__(self, link_properties:list[LinkProperties], input_str='bscq', output_str='bd', normalize=False, traffic_types=None):
+        super().__init__(link_properties, input_str, output_str, traffic_types=traffic_types)
         self.data_type = 'packetqueue'
         self.normalize = normalize
 
@@ -33,19 +34,14 @@ class TraceGeneratorPacketQueue(TraceGenerator):
         }
         return extra_dataset_properties
 
-    def generate_trace_sample(self, lp:LinkProperties, seq_length:int):
-        arrival_rate = np.random.uniform(lp.min_arrival_rate, lp.max_arrival_rate)
-        inter_pkt_time = 1.0 / arrival_rate
-        pkt_arrival_times_v = np.cumsum(np.random.exponential(inter_pkt_time, seq_length))
-        pkt_size_v = np.rint(
-            np.random.uniform(lp.min_pkt_size, lp.max_pkt_size, seq_length))  # Packet size between 60 and 1000 bytes
+    def generate_trace_sample(self, lp:LinkProperties, traffic_type, seq_length:int):
+        # sample the properties of the link (capacity and queue size)
         capacity_s = np.random.uniform(lp.min_capacity, lp.max_capacity)
         capacity_v = np.repeat(capacity_s, seq_length)  # Link capacity (bytes per unit time)
 
         # we'll derive queue a queue size range by dividing the queue range in bytes by the max and min packet size
         min_queue_size = int(lp.min_queue_bytes/lp.max_pkt_size)
         max_queue_size = int(lp.max_queue_bytes/lp.min_pkt_size)
-
         # queue size of <= 0 indicates infinite queue
         if lp.max_queue_bytes <= 0:
             # but we dont want to pass inf as one of the inputs, so set that to zero
@@ -54,6 +50,20 @@ class TraceGeneratorPacketQueue(TraceGenerator):
         else:
             queue_size_s = np.rint(np.random.uniform(min_queue_size, max_queue_size))  # size of queue in bytes
             queue_size_v = np.repeat(queue_size_s, seq_length)
+
+        # In case an inter-packet interval leaves us in the middle of a packet overhead
+        #XXX pkt overhead is not implemented on this link type yet!!
+        remaining_overhead_kbytes = 0
+
+        # we generate the packets one by one and compute how the link handles them
+        tg = TrafficGenerator.create(lp, traffic_type)
+        pkt_arrival_times_v = np.zeros(seq_length)
+        pkt_size_v = np.zeros(seq_length)
+
+        dropped_sizes = []  # Store dropped packet sizes
+        dropped_indices = []  # Store the indices of dropped packets
+        dropped_status = np.zeros(seq_length, dtype=int)
+
         backlog_v = np.zeros(seq_length)
         latency_v = np.zeros(seq_length)  # Track latency (proportional to backlog)
         queue_bytes = pkt_size_v[0]  # Current queue length in bytes
@@ -63,13 +73,21 @@ class TraceGeneratorPacketQueue(TraceGenerator):
         backlog_v[0] = queue_bytes
         latency_v[0] = backlog_v[0] * 8 / capacity_s
 
-        dropped_sizes = []  # Store dropped packet sizes
-        dropped_indices = []  # Store the indices of dropped packets
-        dropped_status = np.zeros(seq_length, dtype=int)
+        pkt_info: PacketInfo = tg.next_packet()
+        queue_kbytes = pkt_info.size_kbyte  # Current queue length in kbytes
+        queue_pkts = deque([pkt_info.size_kbyte])
+        total_kbytes_sent = pkt_info.size_kbyte
+
+        backlog_v[0] = queue_kbytes + lp.overhead_bytes
+        latency_v[0] = backlog_v[0] * 8 / capacity_s   # [KByte]*[bit/Byte]/[KBit/ms] = [ms]
+        pkt_arrival_times_v[0] = pkt_info.tx_time_ms
 
         for i in range(1, seq_length):
-            time_passed = pkt_arrival_times_v[i] - pkt_arrival_times_v[i - 1]  # Time between packets
-            bytes_processed_interval = time_passed * capacity_s
+            pkt_info: PacketInfo = tg.next_packet(latency_v[i-1], dropped_status[i-1])
+            pkt_arrival_times_v[i] = pkt_info.tx_time_ms
+            pkt_size_v[i] = pkt_info.size_kbyte
+            time_passed_ms = pkt_arrival_times_v[i] - pkt_arrival_times_v[i - 1]  # Time between packets
+            bytes_processed_interval = time_passed_ms * capacity_s
             queue_bytes = max(0, queue_bytes - bytes_processed_interval)  # Process queued packets
             # go through the queue and figure out which packets departed
             total_bytes_sent += bytes_processed_interval
