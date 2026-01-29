@@ -12,6 +12,7 @@ class LinkProperties:
     min_queue_bytes: float    # KByte
     max_queue_bytes: float    # KByte
     overhead_bytes: float     # KByte
+    traffic_generator: str
     #inter_pkt_time:float = 1.0  # Average time between packets (seconds per packet)
     #seq_length:int = 128  # Length of each sequence
 
@@ -27,7 +28,8 @@ link_properties_library = {
                                    max_pkt_size=1.4,
                                    min_queue_bytes=5,
                                    max_queue_bytes=10,
-                                   overhead_bytes=0),
+                                   overhead_bytes=0,
+                                   traffic_generator="exponential"),
 
     'daglike': LinkProperties(min_arrival_rate=0.2,
                               max_arrival_rate=15,
@@ -37,7 +39,8 @@ link_properties_library = {
                               max_pkt_size=1.4,
                               min_queue_bytes=5,
                               max_queue_bytes=50,
-                              overhead_bytes=0.024),  # 24 Bytes of overhead
+                              overhead_bytes=0.024,  # 24 Bytes of overhead
+                              traffic_generator="exponential"),
 
     'daglike-ping': LinkProperties(min_arrival_rate=0.001,  # 1 pkt/second
                               max_arrival_rate=0.001,
@@ -47,7 +50,8 @@ link_properties_library = {
                               max_pkt_size=0.084,
                               min_queue_bytes=5,
                               max_queue_bytes=50,
-                              overhead_bytes=0.024),  # 24 Bytes of overhead
+                              overhead_bytes=0.024,  # 24 Bytes of overhead
+                              traffic_generator="exponential"),
 
     'daglike-overload': LinkProperties(min_arrival_rate=0.2,
                               max_arrival_rate=100,
@@ -57,7 +61,8 @@ link_properties_library = {
                               max_pkt_size=1.4,
                               min_queue_bytes=5,
                               max_queue_bytes=100,
-                              overhead_bytes=0.024),  # 24 Bytes of overhead
+                              overhead_bytes=0.024,  # 24 Bytes of overhead
+                              traffic_generator="exponential"),
 
     'daglike-vping': LinkProperties(min_arrival_rate=0.001,  # 1 pkt/second
                                    max_arrival_rate=0.001,
@@ -67,7 +72,8 @@ link_properties_library = {
                                    max_pkt_size=1.4,
                                    min_queue_bytes=5,
                                    max_queue_bytes=50,
-                                   overhead_bytes=0.024),  # 24 Bytes of overhead
+                                   overhead_bytes=0.024,  # 24 Bytes of overhead
+                                   traffic_generator="exponential"),
 
     # same scale as default, but with less tendency to produce huge backlogs
     'default-light': LinkProperties(min_arrival_rate=0.2,
@@ -78,7 +84,8 @@ link_properties_library = {
                               max_pkt_size=1500,
                               min_queue_bytes=2500,
                               max_queue_bytes=10000,
-                              overhead_bytes=0),
+                              overhead_bytes=0,
+                              traffic_generator="exponential"),
 
     'blank': LinkProperties(min_arrival_rate=0.0,
                               max_arrival_rate=0,
@@ -88,7 +95,8 @@ link_properties_library = {
                               max_pkt_size=0,
                               min_queue_bytes=0,
                               max_queue_bytes=0,
-                              overhead_bytes=0),
+                              overhead_bytes=0,
+                              traffic_generator="exponential"),
 
     # constant capacity, packet size, arrival rate
     'const-rates':      LinkProperties(min_arrival_rate=1,
@@ -99,7 +107,8 @@ link_properties_library = {
                                    max_pkt_size=900,
                                    min_queue_bytes=0,
                                    max_queue_bytes=0,
-                                   overhead_bytes=0),
+                                   overhead_bytes=0,
+                                   traffic_generator="exponential"),
 
     '1-10Mbps':     LinkProperties(min_arrival_rate=125,  # 125 pkt/s ~~ 1Mbps
                                    max_arrival_rate=1250, # 1250 pkt/s ~~ 10Mbps
@@ -109,7 +118,8 @@ link_properties_library = {
                                    max_pkt_size=1500,
                                    min_queue_bytes=5*1000,
                                    max_queue_bytes=10*1000,
-                                   overhead_bytes=0), # 10 average-sized packets
+                                   overhead_bytes=0, # 10 average-sized packets
+                                   traffic_generator="exponential"),
 
     '1-10Mbps-scaled': LinkProperties(min_arrival_rate=125/1000,  # 0.125 kpkt/sec
                                max_arrival_rate=1250/1000,  # 1.25 kpkt/sec
@@ -119,7 +129,8 @@ link_properties_library = {
                                max_pkt_size=1500,
                                min_queue_bytes=5 * 1000,
                                max_queue_bytes=10 * 1000,
-                               overhead_bytes=0),  # 10 average-sized packets
+                               overhead_bytes=0,  # 10 average-sized packets
+                               traffic_generator="exponential"),
 
     '1Mbps-exact': LinkProperties(min_arrival_rate=125,  # 125 pkt/s ~~ 1Mbps
                                max_arrival_rate=125,  # 1250 pkt/s ~~ 10Mbps
@@ -129,7 +140,8 @@ link_properties_library = {
                                max_pkt_size=1500,
                                min_queue_bytes=5 * 1000,
                                max_queue_bytes=10 * 1000,
-                               overhead_bytes=0),  # 10 average-sized packets
+                               overhead_bytes=0,  # 10 average-sized packets
+                               traffic_generator="exponential"),
 
     'experiment': LinkProperties(min_arrival_rate=1.25,   # 1 Mbps
                                   max_arrival_rate=12.5,  # 12.5 pkt/ms = 1250 pkt/s ~~ 10Mbps
@@ -139,7 +151,8 @@ link_properties_library = {
                                   max_pkt_size=1.500,# 1.5 Kb = 1500 B
                                   min_queue_bytes=5, # 5 KB
                                   max_queue_bytes=50,
-                                  overhead_bytes=0),# 50 average-sized packets
+                                  overhead_bytes=0,# 50 average-sized packets
+                                  traffic_generator="exponential"),
 
     # same as experiment but wider range of rates and capacities and pkt sizes
     'experiment2': LinkProperties(min_arrival_rate=0.001,  # 0.001pkt/ms = 1 pkt/s ~~ ping
@@ -150,6 +163,7 @@ link_properties_library = {
                                  max_pkt_size=1.500,  # 1.5 Kb = 1500 B
                                  min_queue_bytes=5,  # 5 KB
                                  max_queue_bytes=50,
-                                 overhead_bytes=0),  # 50 average-sized packets
+                                 overhead_bytes=0,  # 50 average-sized packets
+                                 traffic_generator="TrafficGeneratorExponential"),
 
 }

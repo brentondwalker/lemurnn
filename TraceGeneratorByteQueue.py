@@ -17,6 +17,10 @@ import torch.utils.data as data
 from torch.utils.data import DataLoader, TensorDataset
 
 from TraceGenerator import TraceGenerator, LinkProperties, TraceSample
+from TrafficGenerator import TrafficGenerator, PacketInfo
+from TrafficGeneratorCBR import TrafficGeneratorCBR
+from TrafficGeneratorExponential import TrafficGeneratorExponential
+
 
 
 class TraceGeneratorByteQueue(TraceGenerator):
@@ -35,17 +39,11 @@ class TraceGeneratorByteQueue(TraceGenerator):
         return extra_dataset_properties
 
     def generate_trace_sample(self, lp:LinkProperties, seq_length:int):
-        # compute the packet arrival rate [pkt/ms] to achieve the desired arrival rate
-        arrival_rate = np.random.uniform(lp.min_arrival_rate, lp.max_arrival_rate)
-        mean_pkt_size_kbyte = (lp.max_pkt_size + lp.min_pkt_size) / 2
-        # [Kbit/ms] / [bit/Byte][KByte/pkt] = [pkt/ms]
-        pkt_arrival_rate_ms = arrival_rate / (8 * mean_pkt_size_kbyte)
-        inter_pkt_time_ms = 1.0 / pkt_arrival_rate_ms   # [ms/pkt]
-        pkt_arrival_times_v = np.cumsum(np.random.exponential(inter_pkt_time_ms, seq_length))
-        # if we measure packet size in KByte, then we can't round the size to integer values
-        pkt_size_v = np.random.uniform(lp.min_pkt_size, lp.max_pkt_size, seq_length)
+
+        # sample the properties of the link (capacity and queue size)
         capacity_s = np.random.uniform(lp.min_capacity, lp.max_capacity)
         capacity_v = np.repeat(capacity_s, seq_length)  # Link capacity (bytes per unit time)
+
         # queue size of <= 0 indicates infinite queue
         if lp.max_queue_bytes <= 0:
             # but we don't want to pass inf as one of the inputs, so set that to zero
@@ -63,20 +61,31 @@ class TraceGeneratorByteQueue(TraceGenerator):
         # In case an inter-packet interval leaves us in the middle of a packet overhead
         remaining_overhead_kbytes = 0
 
-        backlog_v = np.zeros(seq_length)
-        latency_v = np.zeros(seq_length)  # Track latency (proportional to backlog)
-        queue_kbytes = pkt_size_v[0]  # Current queue length in kbytes
-        queue_pkts = deque([pkt_size_v[0]])
-        total_kbytes_sent = 0
-
-        backlog_v[0] = queue_kbytes + lp.overhead_bytes
-        latency_v[0] = backlog_v[0] * 8 / capacity_s   # [KByte]*[bit/Byte]/[KBit/ms] = [ms]
+        # we generate the packets one by one and compute how the link handles them
+        tg = TrafficGenerator.create(lp)
+        pkt_arrival_times_v = np.zeros(seq_length)
+        pkt_size_v = np.zeros(seq_length)
 
         dropped_sizes = []  # Store dropped packet sizes
         dropped_indices = []  # Store the indices of dropped packets
         dropped_status = np.zeros(seq_length, dtype=int)
 
-        for i in range(1, seq_length):
+
+        backlog_v = np.zeros(seq_length)
+        latency_v = np.zeros(seq_length)  # Track latency (proportional to backlog)
+        pkt_info: PacketInfo = tg.next_packet()
+        queue_kbytes = pkt_info.size_kbyte  # Current queue length in kbytes
+        queue_pkts = deque([pkt_info.size_kbyte])
+        total_kbytes_sent = pkt_info.size_kbyte
+
+        backlog_v[0] = queue_kbytes + lp.overhead_bytes
+        latency_v[0] = backlog_v[0] * 8 / capacity_s   # [KByte]*[bit/Byte]/[KBit/ms] = [ms]
+        pkt_arrival_times_v[0] = pkt_info.tx_time_ms
+
+        for i in range(1,seq_length):
+            pkt_info:PacketInfo = tg.next_packet()
+            pkt_arrival_times_v[i] = pkt_info.tx_time_ms
+            pkt_size_v[i] = pkt_info.size_kbyte
             time_passed_ms = pkt_arrival_times_v[i] - pkt_arrival_times_v[i - 1]  # Time between packets
             kbytes_processed_interval = time_passed_ms * capacity_s / 8
             queue_kbytes = max(0, queue_kbytes - kbytes_processed_interval)  # Process queued packets
