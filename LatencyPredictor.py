@@ -91,7 +91,7 @@ class LatencyPredictor:
 
     def __init__(self, model:LinkEmuModel, trace_generator:TraceGenerator,
                  device=None, seed=None, loadpath=None, track_grad=False,
-                 drop_masking=False):
+                 drop_masking=False, wandb_run=None):
         """
         XXX in the case of loadpath, we should load all the model info from the
         :param trace_generator:
@@ -113,6 +113,7 @@ class LatencyPredictor:
         self.output_size = trace_generator.output_size()
         self.model:LinkEmuModel = model.to(self.device)
         self.drop_masking = drop_masking
+        self.wandb_run = wandb_run
         if self.drop_masking:
             self.trainer_name += "_dropmask"
         if loadpath:
@@ -389,6 +390,14 @@ class LatencyPredictor:
             with open(training_history_filename, "a", buffering=1) as history_file:
                 history_file.write(json.dumps(dataclasses.asdict(self.training_history[-1])))
                 history_file.write("\n")
+            if self.wandb_run:
+                self.wandb_run.log({"epoch": self.epoch,
+                                    "train_loss": train_loss,
+                                    "val_loss": val_loss,
+                                    "test_loss": test_loss,
+                                    "best_loss": self.best_loss,
+                                    "t_backlog_loss": t_backlog_loss,
+                                    "best_model_epoch": self.best_model_epoch})
 
 
     def adropsim(self, s1, s2, drop_radius=0):

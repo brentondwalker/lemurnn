@@ -2,6 +2,7 @@
 
 import argparse
 import sys
+import wandb
 
 from DropGRU import DropGRU
 from DropLSTM import DropLSTM
@@ -17,6 +18,18 @@ from LatencyPredictorEnergy import LatencyPredictorEnergy
 from TraceGeneratorDagData import TraceGeneratorDagData
 from TraceGeneratorPacketQueue import TraceGeneratorPacketQueue
 
+
+def setup_wandb(wandb_cfg:dict):
+    # Start a new wandb run to track this script.
+    run = wandb.init(
+        # Set the wandb entity where your project will be logged (generally your team name).
+        entity="brenton-d-walker-no",
+        # Set the wandb project where this run will be logged.
+        project="lemurnn",
+        # Track hyperparameters and run metadata.
+        config=wandb_cfg,
+    )
+    return run
 
 def main():
     # configure:
@@ -144,8 +157,28 @@ def main():
     model.set_optimizer()
     print(f"MODEL NAME IS: {model.get_model_name()}")
 
+    wandb_cfg = {
+        'link_properties':  link_properties_strs,
+        'learning_rate':    learning_rate,
+        'traffic_types':    traffic_types,
+        'num_layers':       num_layers,
+        'hidden_size':      hidden_size,
+        'model':            model.get_model_name(),
+        'trace_generator':  trace_generator.data_type,
+        'kilo_training_samples': kilo_training_samples,
+        'kilo_val_samples': kilo_val_samples,
+        'kilo_test_samples':    kilo_test_samples,
+        'multiloader':      multiloader,
+        'seq_len':          seq_len,
+        'nonlinearity':     nonlinearity,
+        'drop_masking':     drop_masking,
+        'data_seed':        data_seed,
+        'torch_seed':       torch_seed
+    }
+    wandb_run = setup_wandb(wandb_cfg)
+
     if earthmover:
-        latency_predictor = LatencyPredictorEarthmover(model, trace_generator=trace_generator, seed=torch_seed, drop_masking=drop_masking)
+        latency_predictor = LatencyPredictorEarthmover(model, trace_generator=trace_generator, seed=torch_seed, drop_masking=drop_masking, wandb_run=wandb_run)
     elif energy:
         latency_predictor = LatencyPredictorEnergy(model, trace_generator=trace_generator, seed=torch_seed)
     else:
@@ -153,7 +186,7 @@ def main():
 
     latency_predictor.train(learning_rate=learning_rate, n_epochs=num_epochs, ads_loss_interval=ads_loss_interval)
 
-
+    wandb_run.finish()
 
 # ======================================
 # ======================================

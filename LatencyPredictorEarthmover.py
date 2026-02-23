@@ -21,12 +21,12 @@ class LatencyPredictorEarthmover(LatencyPredictor):
 
     def __init__(self, model:LinkEmuModel, trace_generator: TraceGenerator,
                  device=None, seed=None, loadpath=None, track_grad=False,
-                 drop_masking=False):
+                 drop_masking=False, wandb_run=None):
         """
         Use earthmover distance as a metric to compare drop predictions.
         """
         self.earthmover_p = 1
-        super().__init__(model, trace_generator, device=device, seed=seed, loadpath=loadpath, track_grad=track_grad, drop_masking=drop_masking)
+        super().__init__(model, trace_generator, device=device, seed=seed, loadpath=loadpath, track_grad=track_grad, drop_masking=drop_masking, wandb_run=wandb_run)
 
 
     def get_extra_model_properties(self):
@@ -290,4 +290,11 @@ class LatencyPredictorEarthmover(LatencyPredictor):
             with open(training_history_filename, "a", buffering=1) as history_file:
                 history_file.write(json.dumps(dataclasses.asdict(self.training_history[-1])))
                 history_file.write("\n")
-
+            if self.wandb_run:
+                self.wandb_run.log({"epoch": self.epoch,
+                                    "train_loss": train_loss,
+                                    "val_loss": val_loss,
+                                    "test_loss": test_loss,
+                                    "best_loss": self.best_loss,
+                                    "t_backlog_loss": t_backlog_loss,
+                                    "best_model_epoch": self.best_model_epoch})
