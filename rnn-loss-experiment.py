@@ -28,6 +28,8 @@ def setup_wandb(wandb_cfg:dict):
         project="lemurnn",
         # Track hyperparameters and run metadata.
         config=wandb_cfg,
+        # include this too for some reason
+        job_type="training"
     )
     return run
 
@@ -158,24 +160,27 @@ def main():
     print(f"MODEL NAME IS: {model.get_model_name()}")
 
     wandb_cfg = {
-        'link_properties':  link_properties_strs,
-        'learning_rate':    learning_rate,
-        'traffic_types':    traffic_types,
+        'model':            model.get_model_name(),
         'num_layers':       num_layers,
         'hidden_size':      hidden_size,
-        'model':            model.get_model_name(),
+        'learning_rate':    learning_rate,
+        'nonlinearity':     nonlinearity,
+        'dropout_rate':     dropout_rate,
+        'drop_masking':     drop_masking,
+        'link_properties':  link_properties_strs,
+        'traffic_types':    traffic_types,
         'trace_generator':  trace_generator.data_type,
         'kilo_training_samples': kilo_training_samples,
         'kilo_val_samples': kilo_val_samples,
         'kilo_test_samples':    kilo_test_samples,
         'multiloader':      multiloader,
         'seq_len':          seq_len,
-        'nonlinearity':     nonlinearity,
-        'drop_masking':     drop_masking,
         'data_seed':        data_seed,
-        'torch_seed':       torch_seed
+        'torch_seed':       torch_seed,
+        'training_directory': model.training_directory
     }
     wandb_run = setup_wandb(wandb_cfg)
+    wandb.watch(model)
 
     if earthmover:
         latency_predictor = LatencyPredictorEarthmover(model, trace_generator=trace_generator, seed=torch_seed, drop_masking=drop_masking, wandb_run=wandb_run)

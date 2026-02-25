@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import List
 import torch
 import torch.nn as nn
+import wandb
 from torch.autograd import Variable
 import pytorch_stats_loss as stats_loss
 
@@ -397,6 +398,12 @@ class LatencyPredictor:
                                     "test_loss": test_loss,
                                     "best_loss": self.best_loss,
                                     "t_backlog_loss": t_backlog_loss,
+                                    "t_dropped_loss": t_dropped_loss,
+                                    "t_dropped_em1_loss": t_dropped_wa_loss,
+                                    "t_dropped_em2_loss": t_dropped_en_loss,
+                                    "t_dropped_em15_loss": t_dropped_p15_loss,
+                                    "t_droprate_loss": t_droprate_loss,
+                                    "ads_str": ads_str,
                                     "best_model_epoch": self.best_model_epoch})
 
 
@@ -513,7 +520,7 @@ class LatencyPredictor:
         # turn off interactive mode so plots don't display until we call plt.show()
         plt.ioff()
 
-        plt.figure(figsize=(12, 6))
+        fig = plt.figure(figsize=(12, 6))
         plt.plot(pkt_arrival_times_v, true_backlog, label="Generated Backlog", color='green', linewidth=2.5, zorder=1)
         plt.plot(pkt_arrival_times_v, predicted_backlog, label="Predicted Backlog", linestyle="dashed", color='red', linewidth=2.5, zorder=1)
 
@@ -540,6 +547,11 @@ class LatencyPredictor:
             plt.savefig(f"{self.training_directory}/BD_plot_{data_set_name}_sample{test_index}{file_suffix}.png", format='png')
         if display_plot:
             plt.show()
+        if self.wandb_run:
+            self.wandb_run.log({
+                "best_model_performance": wandb.Image(fig),
+                "epoch": self.epoch,
+            })
         # tell matplotlib we are done with the figure
         plt.close()
 

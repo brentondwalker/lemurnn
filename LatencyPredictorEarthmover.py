@@ -183,7 +183,7 @@ class LatencyPredictorEarthmover(LatencyPredictor):
                 self.best_loss = val_loss
                 self.best_model = deepcopy(self.model.state_dict())
                 self.best_model_epoch = self.epoch
-                self.model.save_model_state(self.epoch)
+                self.model.save_model_state(self.epoch, wandb_run=self.wandb_run)
                 new_best_model = True
                 ads_new_model = True
 
@@ -297,4 +297,10 @@ class LatencyPredictorEarthmover(LatencyPredictor):
                                     "test_loss": test_loss,
                                     "best_loss": self.best_loss,
                                     "t_backlog_loss": t_backlog_loss,
+                                    "t_dropped_loss": t_dropped_loss,
+                                    "t_dropped_em1_loss": t_dropped_em1_loss,
+                                    "t_dropped_em2_loss": t_dropped_em2_loss,
+                                    "t_dropped_em15_loss": t_dropped_em15_loss,
+                                    "t_droprate_loss": t_droprate_loss,
+                                    "ads_str": ads_str,
                                     "best_model_epoch": self.best_model_epoch})

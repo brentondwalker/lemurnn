@@ -4,6 +4,7 @@ import re
 
 import torch
 import torch.nn as nn
+import wandb
 from torch import optim
 from torch.export import Dim
 
@@ -86,7 +87,7 @@ class LinkEmuModel(nn.Module):
     def load_extra_model_properties(self, model_properties):
         return
 
-    def save_model_state(self, epoch):
+    def save_model_state(self, epoch, wandb_run=None):
         """
         To load it again:
         state = torch.load(filepath)
@@ -101,6 +102,10 @@ class LinkEmuModel(nn.Module):
             }
         filepath = f"{self.training_directory}/modelstate-{epoch}.json"
         torch.save(state, filepath)
+        if wandb_run:
+            artifact = wandb.Artifact(name="best_model", type="model")
+            artifact.add_file(filepath)
+            wandb_run.log_artifact(artifact)
         self.export_torchscript(f"{self.training_directory}/modelstate-torchscript-{epoch}.pt")
         # skip ONNX for now.
         # too buggy and requires lots of special handling for LSTM
