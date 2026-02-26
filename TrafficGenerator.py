@@ -38,6 +38,10 @@ class TrafficGenerator(ABC):
         #if type(self) is TrafficGenerator:
         #    self.traffic_generator = SUBCLASS_MAPPING[link_properties.traffic_generator](link_properties)
 
+    @classmethod
+    def get_all_traffic_types(cls):
+        return cls._registry.keys()
+
     @staticmethod
     def create(link_properties:LinkProperties, traffic_type):
         return TrafficGenerator._registry[traffic_type](link_properties)
