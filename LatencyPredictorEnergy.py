@@ -18,7 +18,7 @@ class LatencyPredictorEnergy(LatencyPredictor):
 
     model_type = 'rnnenergy'
 
-    def __init__(self, model:LinkEmuModel, trace_generator: TraceGenerator, device=None, seed=None, loadpath=None):
+    def __init__(self, model:LinkEmuModel, trace_generator: TraceGenerator, device=None, seed=None, loadpath=None, wandb_run=None):
         """
         Because the superclass init() already creates the training directory and saves the model properties,
         we would have to set any variables we want before calling the super().init().
@@ -26,7 +26,7 @@ class LatencyPredictorEnergy(LatencyPredictor):
         So model_type and energy_distance_scale are hard coded in the class, which may be even worse.
         """
         self.energy_distance_scale = 10
-        super().__init__(model, trace_generator, device=device, seed=seed, loadpath=loadpath)
+        super().__init__(model, trace_generator, device=device, seed=seed, loadpath=loadpath, wandb_run=wandb_run)
 
 
     def get_extra_model_properties(self):
@@ -151,7 +151,7 @@ class LatencyPredictorEnergy(LatencyPredictor):
                 self.best_loss = val_loss
                 self.best_model = deepcopy(self.model.state_dict())
                 self.best_model_epoch = self.epoch
-                self.model.save_model_state(self.epoch)
+                self.model.save_model_state(self.epoch, wandb_run=self.wandb_run)
                 new_best_model = True
                 ads_new_model = True
 
@@ -250,4 +250,17 @@ class LatencyPredictorEnergy(LatencyPredictor):
             with open(training_history_filename, "a", buffering=1) as history_file:
                 history_file.write(json.dumps(dataclasses.asdict(self.training_history[-1])))
                 history_file.write("\n")
-
+            if self.wandb_run:
+                self.wandb_run.log({"epoch": self.epoch,
+                                    "train_loss": train_loss,
+                                    "val_loss": val_loss,
+                                    "test_loss": test_loss,
+                                    "best_loss": self.best_loss,
+                                    "t_backlog_loss": t_backlog_loss,
+                                    "t_dropped_loss": t_dropped_loss,
+                                    "t_dropped_em1_loss": t_dropped_em1_loss,
+                                    "t_dropped_em2_loss": t_dropped_em2_loss,
+                                    "t_dropped_em15_loss": t_dropped_em15_loss,
+                                    "t_droprate_loss": t_droprate_loss,
+                                    "ads_str": ads_str,
+                                    "best_model_epoch": self.best_model_epoch})

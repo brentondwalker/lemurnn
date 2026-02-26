@@ -64,6 +64,7 @@ def main():
     parser.add_argument('--normalize', action='store_true')
     parser.add_argument('--multiloader', action='store_true')
     parser.add_argument('--drop_masking', action='store_true')
+    parser.add_argument('--wandb', action='store_true')
 
     args = parser.parse_args()
 
@@ -99,6 +100,7 @@ def main():
         nonlinearity = 'tanh'
     if compute_ads_loss:
         ads_loss_interval = 100
+    use_wandb = args.wandb
 
     if link_properties_strs is None:
         link_properties_strs = ['default']
@@ -159,28 +161,30 @@ def main():
     model.set_optimizer()
     print(f"MODEL NAME IS: {model.get_model_name()}")
 
-    wandb_cfg = {
-        'model':            model.get_model_name(),
-        'num_layers':       num_layers,
-        'hidden_size':      hidden_size,
-        'learning_rate':    learning_rate,
-        'nonlinearity':     nonlinearity,
-        'dropout_rate':     dropout_rate,
-        'drop_masking':     drop_masking,
-        'link_properties':  link_properties_strs,
-        'traffic_types':    traffic_types,
-        'trace_generator':  trace_generator.data_type,
-        'kilo_training_samples': kilo_training_samples,
-        'kilo_val_samples': kilo_val_samples,
-        'kilo_test_samples':    kilo_test_samples,
-        'multiloader':      multiloader,
-        'seq_len':          seq_len,
-        'data_seed':        data_seed,
-        'torch_seed':       torch_seed,
-        'training_directory': model.training_directory
-    }
-    wandb_run = setup_wandb(wandb_cfg)
-    wandb.watch(model)
+    wandb_run = None
+    if use_wandb:
+        wandb_cfg = {
+            'model':            model.get_model_name(),
+            'num_layers':       num_layers,
+            'hidden_size':      hidden_size,
+            'learning_rate':    learning_rate,
+            'nonlinearity':     nonlinearity,
+            'dropout_rate':     dropout_rate,
+            'drop_masking':     drop_masking,
+            'link_properties':  link_properties_strs,
+            'traffic_types':    traffic_types,
+            'trace_generator':  trace_generator.data_type,
+            'kilo_training_samples': kilo_training_samples,
+            'kilo_val_samples': kilo_val_samples,
+            'kilo_test_samples':    kilo_test_samples,
+            'multiloader':      multiloader,
+            'seq_len':          seq_len,
+            'data_seed':        data_seed,
+            'torch_seed':       torch_seed,
+            'training_directory': model.training_directory
+        }
+        wandb_run = setup_wandb(wandb_cfg)
+        wandb.watch(model)
 
     if earthmover:
         latency_predictor = LatencyPredictorEarthmover(model, trace_generator=trace_generator, seed=torch_seed, drop_masking=drop_masking, wandb_run=wandb_run)
@@ -191,7 +195,8 @@ def main():
 
     latency_predictor.train(learning_rate=learning_rate, n_epochs=num_epochs, ads_loss_interval=ads_loss_interval)
 
-    wandb_run.finish()
+    if wandb_run:
+        wandb_run.finish()
 
 # ======================================
 # ======================================
