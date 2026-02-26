@@ -327,7 +327,7 @@ class LatencyPredictorEarthmover(LatencyPredictor):
                 history_file.write(json.dumps(dataclasses.asdict(self.training_history[-1])))
                 history_file.write("\n")
             if self.wandb_run:
-                self.wandb_run.log({"epoch": self.epoch,
+                wandb_log_data = {"epoch": self.epoch,
                                     "train_loss": train_loss,
                                     "val_loss": val_loss,
                                     "test_loss": test_loss,
@@ -339,4 +339,13 @@ class LatencyPredictorEarthmover(LatencyPredictor):
                                     "t_dropped_em15_loss": t_dropped_em15_loss,
                                     "t_droprate_loss": t_droprate_loss,
                                     "ads_str": ads_str,
-                                    "best_model_epoch": self.best_model_epoch})
+                                    "best_model_epoch": self.best_model_epoch}
+                # also log loss data for test sets of different traffic types
+                for traffic_type in self.trace_generator.test_traffic_types:
+                    test_dataset_name = f"test-{traffic_type}"
+                    loss_rec = test_set_losses[test_dataset_name]
+                    wandb_log_data[f"{test_dataset_name}_loss"] = loss_rec['total_loss']
+                    wandb_log_data[f"{test_dataset_name}_backlog_loss"] = loss_rec['backlog_loss']
+                    wandb_log_data[f"{test_dataset_name}_dropped_loss"] = loss_rec['dropped_loss']
+                    wandb_log_data[f"{test_dataset_name}_em1_loss"] = loss_rec['em1_loss']
+                self.wandb_run.log(wandb_log_data)
