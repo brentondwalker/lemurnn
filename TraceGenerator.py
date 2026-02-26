@@ -12,6 +12,8 @@ from typing import List
 import torch
 import torch.utils.data as data
 from torch.utils.data import DataLoader, TensorDataset
+
+from TrafficGenerator import TrafficGenerator
 from LinkProperties import LinkProperties
 
 # need to import these to invoke their __init_subclass__(), even though  they are not used by name.
@@ -58,6 +60,7 @@ class TraceGenerator:
             'val':   {},
             'test':  {}
         }
+        self.test_traffic_types = TrafficGenerator.get_all_traffic_types()
         #self.train_loader: data.DataLoader = None
         #self.val_loader: data.DataLoader = None
         #self.test_loader: data.DataLoader = None
@@ -202,7 +205,7 @@ class TraceGenerator:
         return self.feature_vector_from_sample(self.trace_data[data_set_name][test_index])
 
 
-    def generate_trace_data_set(self, num_samples, seq_length, data_set_name='train'):
+    def generate_trace_data_set(self, num_samples, seq_length, data_set_name='train', traffic_type=None):
         """
         Possible input features:
         - t = inter-packet times
@@ -218,6 +221,9 @@ class TraceGenerator:
         - d = drop
         :param num_samples:
         :param seq_length:
+        :param data_set_name:
+        :param traffic_type: optionally set a fixed traffic type.  Otherwise it will be selected randomly from
+                             self.traffic_types, and if that is not set, it will be taken from the link properties.
         :return:
         """
         dataX = []  # Input sequences
@@ -229,9 +235,10 @@ class TraceGenerator:
             # if there are multiple link_properties, pick a random one
             lp:LinkProperties = random.choice(self.link_properties)
             # we default to the traffic generator in the link_properties, unless one was specified
-            traffic_type = lp.traffic_generator
-            if self.traffic_types:
-                traffic_type = random.choice(self.traffic_types)
+            if traffic_type is None:
+                traffic_type = lp.traffic_generator
+                if self.traffic_types:
+                    traffic_type = random.choice(self.traffic_types)
             trace_sample = self.generate_trace_sample(lp, traffic_type, seq_length)
             input_features, output_features = self.feature_vector_from_sample(trace_sample)
             dataX.append(input_features)
@@ -269,11 +276,21 @@ class TraceGenerator:
         # if we change the size of training or val sets.
         self.num_test_samples = num_test_samples
         self.seq_length_test = seq_lengths_test  # Length of each sequence
-        for seq_length in seq_lengths_test:
-            dataX_test_tensor_v, dataY_test_tensor_v = self.generate_trace_data_set(num_test_samples, seq_length, data_set_name='test')
-            print(dataX_test_tensor_v.shape, dataY_test_tensor_v.shape)
-            self.loaders['test'][seq_length] = data.DataLoader(TensorDataset(dataX_test_tensor_v, dataY_test_tensor_v),
-                                                               shuffle=False, batch_size=batch_size)
+        # test data is special because we want to keep the different traffic types separate
+        # so we can track how well the model is doing on the different traffic types.
+        # With the other loaders we stil mix the samples of different traffic types together.
+        for traffic_type in self.test_traffic_types:
+            test_dataset_name = f"test-{traffic_type}"
+            if test_dataset_name not in self.loaders:
+                self.loaders[test_dataset_name] = {}
+            print(f"creating test dataset with traffic type: {test_dataset_name}")
+            for seq_length in seq_lengths_test:
+                #XXX could replace data_set_name here with something specific to the traffic type
+                #    otherwise they get mixed together
+                dataX_test_tensor_v, dataY_test_tensor_v = self.generate_trace_data_set(num_test_samples, seq_length, data_set_name='test', traffic_type=traffic_type)
+                print(dataX_test_tensor_v.shape, dataY_test_tensor_v.shape)
+                self.loaders[test_dataset_name][seq_length] = data.DataLoader(TensorDataset(dataX_test_tensor_v, dataY_test_tensor_v),
+                                                                   shuffle=False, batch_size=batch_size)
 
         self.num_training_samples = num_training_samples
         self.seq_length_training = seq_lengths_training
