@@ -236,11 +236,13 @@ class TraceGenerator:
             # if there are multiple link_properties, pick a random one
             lp:LinkProperties = random.choice(self.link_properties)
             # we default to the traffic generator in the link_properties, unless one was specified
-            if traffic_type is None:
-                traffic_type = lp.traffic_generator
+            next_traffic_type = traffic_type
+            if next_traffic_type is None:
+                next_traffic_type = lp.traffic_generator
                 if self.traffic_types:
-                    traffic_type = random.choice(self.traffic_types)
-            trace_sample = self.generate_trace_sample(lp, traffic_type, seq_length)
+                    next_traffic_type = random.choice(self.traffic_types)
+                    #print(f"chose traffic type: {next_traffic_type} from options: {self.traffic_types}")
+            trace_sample = self.generate_trace_sample(lp, next_traffic_type, seq_length)
             input_features, output_features = self.feature_vector_from_sample(trace_sample)
             dataX.append(input_features)
             dataY.append(output_features)
