@@ -17,7 +17,7 @@ class TrafficGeneratorBurstyExponential(TrafficGenerator, traffic_type='bursty_e
 
     def __init__(self, link_properties:LinkProperties):
         super().__init__(link_properties)
-        self.traffic_type = 'exponential'
+        self.traffic_type = 'bursty_exponential'
         # [Kbit/ms]
         self.arrival_rate_kbit_ms = np.random.uniform(self.link_properties.min_arrival_rate, self.link_properties.max_arrival_rate)
         self.mean_pkt_size_kbyte = (self.link_properties.max_pkt_size + self.link_properties.min_pkt_size)/2.0

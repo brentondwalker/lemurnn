@@ -17,6 +17,7 @@ from TrafficGenerator import TrafficGenerator
 from LinkProperties import LinkProperties
 
 # need to import these to invoke their __init_subclass__(), even though  they are not used by name.
+from TrafficGeneratorTCPReno import TrafficGeneratorTCPReno
 from TrafficGeneratorCBR import TrafficGeneratorCBR
 from TrafficGeneratorBurstyCBR import TrafficGeneratorBurstyCBR
 from TrafficGeneratorExponential import TrafficGeneratorExponential
