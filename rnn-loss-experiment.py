@@ -7,9 +7,11 @@ import wandb
 from DropGRU import DropGRU
 from DropLSTM import DropLSTM
 from DropReluLSTM import DropReluLSTM
+from LatencyPredictorEarthmoverAR import LatencyPredictorEarthmoverAR
 from LinkEmuModel import LinkEmuModel
 from LinkProperties import link_properties_library
 from NonManualRNN import NonManualRNN
+from NonManualRNNAR import NonManualRNNAR
 from TraceGeneratorByteQueue import TraceGeneratorByteQueue
 from TraceGeneratorCodel import TraceGeneratorCodel
 from LatencyPredictor import *
@@ -65,6 +67,7 @@ def main():
     parser.add_argument('--multiloader', action='store_true')
     parser.add_argument('--drop_masking', action='store_true')
     parser.add_argument('--wandb', action='store_true')
+    parser.add_argument('--autoregressive', action='store_true')
 
     args = parser.parse_args()
 
@@ -101,6 +104,7 @@ def main():
     if compute_ads_loss:
         ads_loss_interval = 100
     use_wandb = args.wandb
+    autoregressive = args.autoregressive
 
     if link_properties_strs is None:
         link_properties_strs = ['default']
@@ -154,10 +158,16 @@ def main():
                                       hidden_size=hidden_size, num_layers=num_layers,
                                       learning_rate=learning_rate, dropout_rate=dropout_rate)
     else:
-        model:LinkEmuModel = NonManualRNN(input_size=trace_generator.input_size(),
-                                          hidden_size=hidden_size, num_layers=num_layers,
-                                          learning_rate=learning_rate, dropout_rate=dropout_rate,
-                                          nonlinearity=nonlinearity)
+        if autoregressive:
+            model:LinkEmuModel = NonManualRNNAR(input_size=trace_generator.input_size(),
+                                              hidden_size=hidden_size, num_layers=num_layers,
+                                              learning_rate=learning_rate, dropout_rate=dropout_rate,
+                                              nonlinearity=nonlinearity)
+        else:
+            model: LinkEmuModel = NonManualRNN(input_size=trace_generator.input_size(),
+                                               hidden_size=hidden_size, num_layers=num_layers,
+                                               learning_rate=learning_rate, dropout_rate=dropout_rate,
+                                               nonlinearity=nonlinearity)
     model.set_optimizer()
     print(f"MODEL NAME IS: {model.get_model_name()}")
 
@@ -187,7 +197,10 @@ def main():
         wandb.watch(model)
 
     if earthmover:
-        latency_predictor = LatencyPredictorEarthmover(model, trace_generator=trace_generator, seed=torch_seed, drop_masking=drop_masking, wandb_run=wandb_run)
+        if autoregressive:
+            latency_predictor = LatencyPredictorEarthmoverAR(model, trace_generator=trace_generator, seed=torch_seed, drop_masking=drop_masking, wandb_run=wandb_run)
+        else:
+            latency_predictor = LatencyPredictorEarthmover(model, trace_generator=trace_generator, seed=torch_seed, drop_masking=drop_masking, wandb_run=wandb_run)
     elif energy:
         latency_predictor = LatencyPredictorEnergy(model, trace_generator=trace_generator, seed=torch_seed)
     else:
