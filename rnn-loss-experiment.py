@@ -188,6 +188,7 @@ def main():
             'kilo_val_samples': kilo_val_samples,
             'kilo_test_samples':    kilo_test_samples,
             'multiloader':      multiloader,
+            'autoregressive':   autoregressive,
             'seq_len':          seq_len,
             'data_seed':        data_seed,
             'torch_seed':       torch_seed,
