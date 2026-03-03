@@ -83,6 +83,8 @@ class TraceGenerator:
             'seed': self.seed,
             'normalize': self.normalize,
             'multiloader': self.multiloader,
+            'traffic_types': self.traffic_types,
+            'test_traffic_types': self.test_traffic_types,
         }
         # add any attributes that are specific to subclasses
         dataset_properties = dict(list(dataset_properties.items()) + list(self.get_extra_dataset_properties().items()))
