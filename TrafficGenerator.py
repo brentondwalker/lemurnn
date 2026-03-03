@@ -40,7 +40,7 @@ class TrafficGenerator(ABC):
 
     @classmethod
     def get_all_traffic_types(cls):
-        return cls._registry.keys()
+        return list(cls._registry.keys())
 
     @staticmethod
     def create(link_properties:LinkProperties, traffic_type):
