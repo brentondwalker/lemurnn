@@ -45,6 +45,9 @@ class LatencyPredictorEarthmoverAR(LatencyPredictor):
         training_log_filename = f"{self.training_directory}/training_log.dat"
         training_history_filename = f"{self.training_directory}/training_history.json"
 
+        # Let's say we train fast for 80% of the epochs
+        burn_in_epochs = int(n_epochs * 0.8)
+
         #self.optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
         criterion_backlog = nn.L1Loss()
         criterion_dropped = nn.CrossEntropyLoss()
@@ -64,8 +67,26 @@ class LatencyPredictorEarthmoverAR(LatencyPredictor):
             output_scale = self.trace_generator.link_properties.max_pkt_size
         normalize_earthmover = True
 
+        test_loss, t_backlog_loss, t_backlog_loss_n, t_dropped_loss = 0, 0, 0, 0
+        t_dropped_em1_loss, t_dropped_em2_loss, t_dropped_em15_loss, t_dropped_emp_loss = 0, 0, 0, 0
+        t_droprate_loss = 0.0
+        ads_str = "\t".join(["0.0000"] * 6)  # Default empty string for logging
+        test_set_losses = {f"test-{tt}": {'total_loss': 0, 'backlog_loss': 0, 'dropped_loss': 0, 'em1_loss': 0} for tt
+                           in self.trace_generator.test_traffic_types}
+
         for epoch_i in range(n_epochs):
             self.epoch += 1
+
+            if epoch_i < burn_in_epochs:
+                # FAST PATH: 100% Teacher Forcing, parallelized by CuDNN
+                teacher_forcing_ratio = 1.0
+            else:
+                # SLOW PATH: Decay the ratio only during the final 20% of epochs
+                decay_steps_left = max(1, n_epochs - burn_in_epochs - 1)
+                current_decay_step = epoch_i - burn_in_epochs
+                # Decays from 1.0 down to 0.0 over the last few epochs
+                teacher_forcing_ratio = max(0.0, 1.0 - (current_decay_step / decay_steps_left))
+
             grad_tracker_backlog.clear()
             grad_tracker_dropped.clear()
             grad_tracker_droprate.clear()
@@ -216,107 +237,109 @@ class LatencyPredictorEarthmoverAR(LatencyPredictor):
                                   'droprate_loss': v_droprate_loss,
                                   'em_loss': v_em_loss}
 
-            # evaluate against test set using the current best model!!
-            test_loss, t_backlog_loss, t_backlog_loss_n, t_dropped_loss = 0, 0, 0, 0
-            t_dropped_em1_loss, t_dropped_em2_loss, t_dropped_em15_loss, t_dropped_emp_loss = 0, 0, 0, 0
-            t_droprate_loss = 0.0
-            if ads_loss_interval > 0 and ads_new_model and (self.epoch % ads_loss_interval) == 0:
-                ads_loss = {0: 0, 1: 0, 2: 0, 4: 0, 8: 0, 16: 0}
-            test_set_losses = {}
-            testmodel.load_state_dict(self.best_model)  # Load the current best model
-            testmodel.eval()  # Ensure evaluation mode
+            # evaluate against test set ONLY if we found a new best model!
+            if new_best_model:
+                # evaluate against test set using the current best model!!
+                test_loss, t_backlog_loss, t_backlog_loss_n, t_dropped_loss = 0, 0, 0, 0
+                t_dropped_em1_loss, t_dropped_em2_loss, t_dropped_em15_loss, t_dropped_emp_loss = 0, 0, 0, 0
+                t_droprate_loss = 0.0
+                if ads_loss_interval > 0 and ads_new_model and (self.epoch % ads_loss_interval) == 0:
+                    ads_loss = {0: 0, 1: 0, 2: 0, 4: 0, 8: 0, 16: 0}
+                test_set_losses = {}
+                testmodel.load_state_dict(self.best_model)  # Load the current best model
+                testmodel.eval()  # Ensure evaluation mode
 
-            with torch.no_grad():
-                total_num_test_samples = 0
-                for traffic_type in self.trace_generator.test_traffic_types:
-                    testp_loss, tp_backlog_loss, tp_backlog_loss_n, tp_dropped_loss = 0, 0, 0, 0
-                    tp_dropped_em1_loss, tp_dropped_em2_loss, tp_dropped_em15_loss, tp_dropped_emp_loss = 0, 0, 0, 0
-                    tp_droprate_loss = 0.0
-                    test_dataset_name = f"test-{traffic_type}"
-                    loader = self.trace_generator.get_loader(test_dataset_name)
-                    for X_test, y_test in loader:
-                        batch_size_test, seq_length, _ = X_test.size()
-                        #hidden = torch.zeros(self.model.num_layers, batch_size_test, self.model.hidden_size).to(self.device)
-                        hidden = self.model.new_hidden_tensor(batch_size_test, self.device)
+                with torch.no_grad():
+                    total_num_test_samples = 0
+                    for traffic_type in self.trace_generator.test_traffic_types:
+                        testp_loss, tp_backlog_loss, tp_backlog_loss_n, tp_dropped_loss = 0, 0, 0, 0
+                        tp_dropped_em1_loss, tp_dropped_em2_loss, tp_dropped_em15_loss, tp_dropped_emp_loss = 0, 0, 0, 0
+                        tp_droprate_loss = 0.0
+                        test_dataset_name = f"test-{traffic_type}"
+                        loader = self.trace_generator.get_loader(test_dataset_name)
+                        for X_test, y_test in loader:
+                            batch_size_test, seq_length, _ = X_test.size()
+                            #hidden = torch.zeros(self.model.num_layers, batch_size_test, self.model.hidden_size).to(self.device)
+                            hidden = self.model.new_hidden_tensor(batch_size_test, self.device)
 
-                        X_test, y_test = X_test.to(self.device), y_test.to(self.device)
-                        ###backlog_target_test = y_test[:, :, 0].unsqueeze(-1)
-                        ###dropped_target_test = y_test[:, :, 1].long()
-                        ###backlog_pred_test, dropped_pred_test, _ = testmodel(X_test, hidden)
-                        # --- MODIFIED ---
-                        backlog_target_test = y_test[:, :, 0].unsqueeze(-1)
-                        dropped_target_test = y_test[:, :, 1].long()
+                            X_test, y_test = X_test.to(self.device), y_test.to(self.device)
+                            ###backlog_target_test = y_test[:, :, 0].unsqueeze(-1)
+                            ###dropped_target_test = y_test[:, :, 1].long()
+                            ###backlog_pred_test, dropped_pred_test, _ = testmodel(X_test, hidden)
+                            # --- MODIFIED ---
+                            backlog_target_test = y_test[:, :, 0].unsqueeze(-1)
+                            dropped_target_test = y_test[:, :, 1].long()
 
-                        # CHANGED: Pure autoregressive mode
-                        backlog_pred_test, dropped_pred_test, _ = testmodel(X_test, hidden, teacher_forcing_ratio=0.0)
+                            # CHANGED: Pure autoregressive mode
+                            backlog_pred_test, dropped_pred_test, _ = testmodel(X_test, hidden, teacher_forcing_ratio=0.0)
 
-                        if self.drop_masking:
-                            backlog_target_test = backlog_target_test * (1 - dropped_target_test.unsqueeze(dim=-1))
-                            backlog_pred_test = backlog_pred_test * (1 - dropped_target_test.unsqueeze(dim=-1))
+                            if self.drop_masking:
+                                backlog_target_test = backlog_target_test * (1 - dropped_target_test.unsqueeze(dim=-1))
+                                backlog_pred_test = backlog_pred_test * (1 - dropped_target_test.unsqueeze(dim=-1))
 
-                        backlog_loss_test = criterion_backlog(backlog_pred_test * output_scale, backlog_target_test * output_scale)
-                        # index of capacity input is currently 2
-                        backlog_loss_test_n = criterion_backlog(backlog_pred_test/X_test[:,:,2].unsqueeze(dim=-1), backlog_target_test/X_test[:,:,2].unsqueeze(dim=-1))
-                        dropped_loss_test = criterion_dropped(dropped_pred_test.view(-1, 2), dropped_target_test.view(-1))
-                        dropped_pred_test_binary = torch.argmax(dropped_pred_test, dim=2)
+                            backlog_loss_test = criterion_backlog(backlog_pred_test * output_scale, backlog_target_test * output_scale)
+                            # index of capacity input is currently 2
+                            backlog_loss_test_n = criterion_backlog(backlog_pred_test/X_test[:,:,2].unsqueeze(dim=-1), backlog_target_test/X_test[:,:,2].unsqueeze(dim=-1))
+                            dropped_loss_test = criterion_dropped(dropped_pred_test.view(-1, 2), dropped_target_test.view(-1))
+                            dropped_pred_test_binary = torch.argmax(dropped_pred_test, dim=2)
 
-                        tp_backlog_loss += backlog_loss_test.item()
-                        tp_backlog_loss_n += backlog_loss_test_n.item()
-                        tp_dropped_loss += dropped_loss_test.item()
-                        tp_dropped_em1_loss += torch.sum(stats_loss.symmetric_earthmover(y_test[:, :, 1], dropped_pred_test_binary, p=1, normalize=False)).item()
-                        tp_dropped_em2_loss += torch.sum(stats_loss.symmetric_earthmover(y_test[:, :, 1], dropped_pred_test_binary, p=2, normalize=False)).item()
-                        tp_dropped_em15_loss += torch.sum(stats_loss.symmetric_earthmover(y_test[:, :, 1], dropped_pred_test_binary, p=1.5, normalize=False)).item()
-                        tp_dropped_emp_loss += torch.sum(stats_loss.symmetric_earthmover(y_test[:, :, 1], dropped_pred_test_binary, p=self.earthmover_p, normalize=False)).item()
+                            tp_backlog_loss += backlog_loss_test.item()
+                            tp_backlog_loss_n += backlog_loss_test_n.item()
+                            tp_dropped_loss += dropped_loss_test.item()
+                            tp_dropped_em1_loss += torch.sum(stats_loss.symmetric_earthmover(y_test[:, :, 1], dropped_pred_test_binary, p=1, normalize=False)).item()
+                            tp_dropped_em2_loss += torch.sum(stats_loss.symmetric_earthmover(y_test[:, :, 1], dropped_pred_test_binary, p=2, normalize=False)).item()
+                            tp_dropped_em15_loss += torch.sum(stats_loss.symmetric_earthmover(y_test[:, :, 1], dropped_pred_test_binary, p=1.5, normalize=False)).item()
+                            tp_dropped_emp_loss += torch.sum(stats_loss.symmetric_earthmover(y_test[:, :, 1], dropped_pred_test_binary, p=self.earthmover_p, normalize=False)).item()
 
-                        tp_droprate_loss += torch.sum(torch.abs(
-                            torch.sum(y_test[:, :, 1], dim=1) - torch.sum(dropped_pred_test_binary, dim=1))).item()
-                        #print(dropped_pred_test_binary.shape, y_test[0, :, 1].shape)
-                        if ads_loss_interval > 0 and ads_new_model and (self.epoch % ads_loss_interval) == 0:
-                            # Be frugal with this, because I have not parallelized it.
-                            # It is super slow.
-                            for i in range(batch_size_test):
-                                ads_loss[0] += self.adropsim(dropped_pred_test_binary[i,:], y_test[i, :, 1], 0)
-                                radius = 1
-                                for p in range(5):
-                                    ads_loss[radius] += self.adropsim(dropped_pred_test_binary[i,:], y_test[i, :, 1], radius)
-                                    radius *= 2
-                                #print(f"{self.epoch}.{i}\t{ads_loss}")
+                            tp_droprate_loss += torch.sum(torch.abs(
+                                torch.sum(y_test[:, :, 1], dim=1) - torch.sum(dropped_pred_test_binary, dim=1))).item()
+                            #print(dropped_pred_test_binary.shape, y_test[0, :, 1].shape)
+                            if ads_loss_interval > 0 and ads_new_model and (self.epoch % ads_loss_interval) == 0:
+                                # Be frugal with this, because I have not parallelized it.
+                                # It is super slow.
+                                for i in range(batch_size_test):
+                                    ads_loss[0] += self.adropsim(dropped_pred_test_binary[i,:], y_test[i, :, 1], 0)
+                                    radius = 1
+                                    for p in range(5):
+                                        ads_loss[radius] += self.adropsim(dropped_pred_test_binary[i,:], y_test[i, :, 1], radius)
+                                        radius *= 2
+                                    #print(f"{self.epoch}.{i}\t{ads_loss}")
 
-                    # these track the stats over all traffic types
-                    t_backlog_loss += tp_backlog_loss
-                    t_backlog_loss_n += tp_backlog_loss_n
-                    t_dropped_loss += tp_dropped_loss
-                    t_dropped_em1_loss += tp_dropped_em1_loss
-                    t_dropped_em2_loss += tp_dropped_em2_loss
-                    t_dropped_em15_loss += tp_dropped_em15_loss
-                    t_dropped_emp_loss += tp_dropped_emp_loss
-                    t_droprate_loss += tp_droprate_loss
+                        # these track the stats over all traffic types
+                        t_backlog_loss += tp_backlog_loss
+                        t_backlog_loss_n += tp_backlog_loss_n
+                        t_dropped_loss += tp_dropped_loss
+                        t_dropped_em1_loss += tp_dropped_em1_loss
+                        t_dropped_em2_loss += tp_dropped_em2_loss
+                        t_dropped_em15_loss += tp_dropped_em15_loss
+                        t_dropped_emp_loss += tp_dropped_emp_loss
+                        t_droprate_loss += tp_droprate_loss
 
-                    # compute test stats for just this traffic type
-                    num_test_samples = len(loader) * batch_size_test
-                    total_num_test_samples += num_test_samples
-                    tp_backlog_loss /= num_test_samples
-                    tp_backlog_loss_n /= num_test_samples
-                    tp_dropped_loss /= num_test_samples
-                    tp_dropped_em1_loss /= num_test_samples
-                    tp_dropped_em2_loss /= num_test_samples
-                    tp_dropped_em15_loss /= num_test_samples
-                    tp_dropped_emp_loss /= num_test_samples
-                    tp_droprate_loss /= num_test_samples
-                    test_p_loss = tp_backlog_loss + tp_dropped_emp_loss
-                    test_set_losses[test_dataset_name] = {'total_loss':test_p_loss, 'backlog_loss':tp_backlog_loss,
-                                                          'dropped_loss':tp_dropped_loss, 'em1_loss':tp_dropped_em1_loss}
-                    #print(f"{test_dataset_name}:\t"+ "\t".join(f"{x:.4f}" for x in (test_p_loss, tp_backlog_loss, tp_dropped_em1_loss)))
+                        # compute test stats for just this traffic type
+                        num_test_samples = len(loader) * batch_size_test
+                        total_num_test_samples += num_test_samples
+                        tp_backlog_loss /= num_test_samples
+                        tp_backlog_loss_n /= num_test_samples
+                        tp_dropped_loss /= num_test_samples
+                        tp_dropped_em1_loss /= num_test_samples
+                        tp_dropped_em2_loss /= num_test_samples
+                        tp_dropped_em15_loss /= num_test_samples
+                        tp_dropped_emp_loss /= num_test_samples
+                        tp_droprate_loss /= num_test_samples
+                        test_p_loss = tp_backlog_loss + tp_dropped_emp_loss
+                        test_set_losses[test_dataset_name] = {'total_loss':test_p_loss, 'backlog_loss':tp_backlog_loss,
+                                                              'dropped_loss':tp_dropped_loss, 'em1_loss':tp_dropped_em1_loss}
+                        #print(f"{test_dataset_name}:\t"+ "\t".join(f"{x:.4f}" for x in (test_p_loss, tp_backlog_loss, tp_dropped_em1_loss)))
 
-            t_backlog_loss /= num_test_samples
-            t_backlog_loss_n /= num_test_samples
-            t_dropped_loss /= num_test_samples
-            t_dropped_em1_loss /= num_test_samples
-            t_dropped_em2_loss /= num_test_samples
-            t_dropped_em15_loss /= num_test_samples
-            t_dropped_emp_loss /= num_test_samples
-            t_droprate_loss /= num_test_samples
-            test_loss = t_backlog_loss + t_dropped_emp_loss
+                t_backlog_loss /= num_test_samples
+                t_backlog_loss_n /= num_test_samples
+                t_dropped_loss /= num_test_samples
+                t_dropped_em1_loss /= num_test_samples
+                t_dropped_em2_loss /= num_test_samples
+                t_dropped_em15_loss /= num_test_samples
+                t_dropped_emp_loss /= num_test_samples
+                t_droprate_loss /= num_test_samples
+                test_loss = t_backlog_loss + t_dropped_emp_loss
             if new_best_model:
                 self.prediction_plot(test_index=0, data_set_name='test', display_plot=False, save_png=True, print_stats=False, file_suffix=f"_epoch{self.epoch}")
             if ads_loss_interval > 0 and ads_new_model and (self.epoch % ads_loss_interval) == 0:
