@@ -22,6 +22,11 @@ from TraceGeneratorPacketQueue import TraceGeneratorPacketQueue
 
 
 def setup_wandb(wandb_cfg:dict):
+    # get the current run counter so we can set a custom name
+    api = wandb.Api()
+    runs = api.runs("brenton-d-walker-no/lemurnn")
+    run_name = f"{wandb_cfg['model']}-{wandb_cfg['num_layers']}-{wandb_cfg['hidden_size']}-{len(wandb_cfg['traffic_types'])}-{len(runs)}"
+    print(f"Using wandb run name: \"{run_name}\"")
     # Start a new wandb run to track this script.
     run = wandb.init(
         # Set the wandb entity where your project will be logged (generally your team name).
@@ -31,7 +36,9 @@ def setup_wandb(wandb_cfg:dict):
         # Track hyperparameters and run metadata.
         config=wandb_cfg,
         # include this too for some reason
-        job_type="training"
+        job_type="training",
+        # by default wandb give the runs random names that are confusing when looking at results
+        name=run_name
     )
     return run
 
