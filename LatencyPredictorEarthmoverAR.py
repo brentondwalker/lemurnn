@@ -45,7 +45,7 @@ class LatencyPredictorEarthmoverAR(LatencyPredictor):
         training_log_filename = f"{self.training_directory}/training_log.dat"
         training_history_filename = f"{self.training_directory}/training_history.json"
 
-        # Let's say we train fast for 80% of the epochs
+        # train fast (teacher-forcing) for 80% of the epochs
         burn_in_epochs = int(n_epochs * 0.8)
 
         #self.optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)

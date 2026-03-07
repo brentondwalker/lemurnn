@@ -5,7 +5,9 @@ import sys
 import wandb
 
 from DropGRU import DropGRU
+from DropGRUAR import DropGRUAR
 from DropLSTM import DropLSTM
+from DropLSTMAR import DropLSTMAR
 from DropReluLSTM import DropReluLSTM
 from LatencyPredictorEarthmoverAR import LatencyPredictorEarthmoverAR
 from LinkEmuModel import LinkEmuModel
@@ -25,7 +27,10 @@ def setup_wandb(wandb_cfg:dict):
     # get the current run counter so we can set a custom name
     api = wandb.Api()
     runs = api.runs("brenton-d-walker-no/lemurnn")
-    run_name = f"{wandb_cfg['model']}-{wandb_cfg['num_layers']}-{wandb_cfg['hidden_size']}-{len(wandb_cfg['traffic_types'])}-{len(runs)}"
+    suffix = ""
+    if wandb_cfg['wandb_suffix'] is not None:
+        suffix = f"-{wandb_cfg['wandb_suffix']}"
+    run_name = f"{wandb_cfg['model']}-{wandb_cfg['num_layers']}-{wandb_cfg['hidden_size']}-{len(wandb_cfg['traffic_types'])}{suffix}-{len(runs)}"
     print(f"Using wandb run name: \"{run_name}\"")
     # Start a new wandb run to track this script.
     run = wandb.init(
@@ -74,6 +79,7 @@ def main():
     parser.add_argument('--multiloader', action='store_true')
     parser.add_argument('--drop_masking', action='store_true')
     parser.add_argument('--wandb', action='store_true')
+    parser.add_argument('--wandb_suffix', type=str, default=None)
     parser.add_argument('--autoregressive', action='store_true')
 
     args = parser.parse_args()
@@ -111,6 +117,7 @@ def main():
     if compute_ads_loss:
         ads_loss_interval = 100
     use_wandb = args.wandb
+    wandb_suffix = args.wandb_suffix
     autoregressive = args.autoregressive
 
     if link_properties_strs is None:
@@ -156,14 +163,24 @@ def main():
                                           learning_rate=learning_rate, dropout_rate=dropout_rate)
     elif use_lstm:
         print("USING LSTM!!")
-        model: LinkEmuModel = DropLSTM(input_size=trace_generator.input_size(),
-                                       hidden_size=hidden_size, num_layers=num_layers,
-                                       learning_rate=learning_rate, dropout_rate=dropout_rate)
+        if autoregressive:
+            model: LinkEmuModel = DropLSTMAR(input_size=trace_generator.input_size(),
+                                             hidden_size=hidden_size, num_layers=num_layers,
+                                             learning_rate=learning_rate, dropout_rate=dropout_rate)
+        else:
+            model: LinkEmuModel = DropLSTM(input_size=trace_generator.input_size(),
+                                           hidden_size=hidden_size, num_layers=num_layers,
+                                           learning_rate=learning_rate, dropout_rate=dropout_rate)
     elif use_gru:
         print("USING GRU!!")
-        model: LinkEmuModel = DropGRU(input_size=trace_generator.input_size(),
-                                      hidden_size=hidden_size, num_layers=num_layers,
-                                      learning_rate=learning_rate, dropout_rate=dropout_rate)
+        if autoregressive:
+            model: LinkEmuModel = DropGRUAR(input_size=trace_generator.input_size(),
+                                            hidden_size=hidden_size, num_layers=num_layers,
+                                            learning_rate=learning_rate, dropout_rate=dropout_rate)
+        else:
+            model: LinkEmuModel = DropGRU(input_size=trace_generator.input_size(),
+                                          hidden_size=hidden_size, num_layers=num_layers,
+                                          learning_rate=learning_rate, dropout_rate=dropout_rate)
     else:
         if autoregressive:
             model:LinkEmuModel = NonManualRNNAR(input_size=trace_generator.input_size(),
@@ -199,7 +216,8 @@ def main():
             'seq_len':          seq_len,
             'data_seed':        data_seed,
             'torch_seed':       torch_seed,
-            'training_directory': model.training_directory
+            'training_directory': model.training_directory,
+            'wandb_suffix':     wandb_suffix
         }
         wandb_run = setup_wandb(wandb_cfg)
         wandb.watch(model)
