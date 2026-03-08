@@ -81,6 +81,7 @@ def main():
     parser.add_argument('--wandb', action='store_true')
     parser.add_argument('--wandb_suffix', type=str, default=None)
     parser.add_argument('--autoregressive', action='store_true')
+    parser.add_argument('--use_deltas', action='store_true')
 
     args = parser.parse_args()
 
@@ -119,6 +120,7 @@ def main():
     use_wandb = args.wandb
     wandb_suffix = args.wandb_suffix
     autoregressive = args.autoregressive
+    use_deltas = args.use_deltas
 
     if link_properties_strs is None:
         link_properties_strs = ['default']
@@ -186,7 +188,7 @@ def main():
             model:LinkEmuModel = NonManualRNNAR(input_size=trace_generator.input_size(),
                                               hidden_size=hidden_size, num_layers=num_layers,
                                               learning_rate=learning_rate, dropout_rate=dropout_rate,
-                                              nonlinearity=nonlinearity)
+                                              nonlinearity=nonlinearity, use_deltas=use_deltas)
         else:
             model: LinkEmuModel = NonManualRNN(input_size=trace_generator.input_size(),
                                                hidden_size=hidden_size, num_layers=num_layers,
@@ -213,6 +215,7 @@ def main():
             'kilo_test_samples':    kilo_test_samples,
             'multiloader':      multiloader,
             'autoregressive':   autoregressive,
+            'use_deltas':       use_deltas,
             'seq_len':          seq_len,
             'data_seed':        data_seed,
             'torch_seed':       torch_seed,
@@ -224,7 +227,7 @@ def main():
 
     if earthmover:
         if autoregressive:
-            latency_predictor = LatencyPredictorEarthmoverAR(model, trace_generator=trace_generator, seed=torch_seed, drop_masking=drop_masking, wandb_run=wandb_run)
+            latency_predictor = LatencyPredictorEarthmoverAR(model, trace_generator=trace_generator, seed=torch_seed, drop_masking=drop_masking, wandb_run=wandb_run, use_deltas=use_deltas)
         else:
             latency_predictor = LatencyPredictorEarthmover(model, trace_generator=trace_generator, seed=torch_seed, drop_masking=drop_masking, wandb_run=wandb_run)
     elif energy:

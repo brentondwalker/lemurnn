@@ -93,6 +93,8 @@ class LatencyPredictorEarthmover(LatencyPredictor):
 
                     backlog_loss = criterion_backlog(backlog_pred, backlog_target)
                     dropped_loss = criterion_dropped(dropped_pred.view(-1, 2), dropped_target.view(-1))
+                    print(f"dropped_pred: {dropped_pred.shape}\t dropped_pred.view(-1, 2): {dropped_pred.view(-1, 2).shape}")
+                    print(f"dropped_target: {dropped_target.shape}\t dropped_target.view(-1): {dropped_target.view(-1).shape}")
                     droprate_loss = torch.sum(
                         torch.abs(torch.sum(y_batch[:, :, 1], dim=1) - torch.sum(dropped_pred_binary, dim=1)))
                     emp_loss = torch.sum(stats_loss.symmetric_earthmover(y_batch[:, :, 1], dropped_pred_binary, p=self.earthmover_p, normalize=normalize_earthmover))

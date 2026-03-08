@@ -1,20 +1,20 @@
 import torch
 import torch.nn as nn
-from LinkEmuModel import LinkEmuModel
 from LinkEmuModelAR import LinkEmuModelAR
 
 
 class NonManualRNNAR(LinkEmuModelAR):
     def __init__(self, input_size=4, hidden_size=2, num_layers=1, learning_rate=0.001, loadpath=None,
-                 nonlinearity='relu', dropout_rate=0.0):
-        self.model_name = f"drop{nonlinearity}rnn_ar"
+                 nonlinearity='relu', dropout_rate=0.0, use_deltas=False):
+        self.model_name = f"drop{nonlinearity}rnn_ar{"d" if use_deltas else ""}"
         self.nonlinearity = nonlinearity
 
         # Define the size of the autoregressive feedback (1 backlog + 2 dropped)
-        self.ar_size = 3
+        self.ar_size = 4 if use_deltas else 3
 
         super(NonManualRNNAR, self).__init__(input_size=input_size, hidden_size=hidden_size, num_layers=num_layers,
-                                           learning_rate=learning_rate, dropout_rate=dropout_rate, loadpath=loadpath)
+                                             learning_rate=learning_rate, dropout_rate=dropout_rate, loadpath=loadpath,
+                                             use_deltas=use_deltas)
 
         # CRITICAL CHANGE: Increase the RNN input size to accept the external inputs + the previous outputs
         self.rnn = nn.RNN(input_size=self.input_size + self.ar_size, hidden_size=self.hidden_size,
@@ -26,6 +26,80 @@ class NonManualRNNAR(LinkEmuModelAR):
         self.fc = nn.Linear(in_features=self.hidden_size, out_features=3)
 
     def forward(self, x, hidden, ar_x=None, teacher_forcing_ratio=0.0):
+        if self.use_deltas:
+            return self.forward_deltas(x, hidden, ar_x=ar_x, teacher_forcing_ratio=teacher_forcing_ratio)
+        return self.forward_std(x, hidden, ar_x=ar_x, teacher_forcing_ratio=teacher_forcing_ratio)
+
+    def forward_deltas(self, x, hidden, ar_x=None, teacher_forcing_ratio=0.0):
+        batch_size, seq_len, _ = x.size()
+        device = x.device
+
+        ###print(f"forward_deltas()  ar_x: {ar_x.shape}")
+        backlog_outputs = []
+        dropped_outputs = []
+
+        # ar_x needs to be shape (batch, 1, 4) at every step
+        curr_ar_input = torch.zeros(batch_size, 1, self.ar_size, device=device)
+
+        # We need to track the absolute backlog manually during the slow path
+        prev_cumulative = torch.zeros(batch_size, 1, 1, device=device)
+
+        for t in range(seq_len):
+            curr_x = x[:, t:t + 1, :]
+            rnn_input = torch.cat([curr_x, curr_ar_input], dim=-1)
+            ###print(f"curr_x: {curr_x.shape}\t curr_ar_input: {curr_ar_input.shape}\t rnn_input: {rnn_input.shape}")
+
+            out, hidden = self.rnn(rnn_input, hidden)
+            combined_out = self.fc(out)
+
+            # The model predicts the DELTA, not the absolute value!
+            pred_delta = combined_out[:, :, 0:1]
+            dropped_t = combined_out[:, :, 1:3]
+
+            # --- THE RESIDUAL CONNECTION ---
+            if ar_x is not None and teacher_forcing_ratio == 1.0:
+                # In 100% Teacher Forcing, we trust the ground-truth previous cumulative from ar_x
+                # Assuming ar_x feature index 1 is the cumulative backlog
+                curr_cumulative = ar_x[:, t:t + 1, 1:2] + pred_delta
+            else:
+                # In inference/slow path, we add the predicted delta to our running total
+                curr_cumulative = prev_cumulative + pred_delta
+
+            # Physics constraint: Backlog cannot be negative.
+            curr_cumulative = torch.relu(curr_cumulative)
+
+            backlog_outputs.append(curr_cumulative)
+            dropped_outputs.append(dropped_t)
+
+            # Decide the next Autoregressive Input
+            use_teacher_forcing = (ar_x is not None) and (torch.rand(1).item() < teacher_forcing_ratio)
+
+            if use_teacher_forcing:
+                curr_ar_input = ar_x[:, t:t + 1, :]
+                prev_cumulative = ar_x[:, t:t + 1, 1:2]  # Update our tracker for the next step
+            else:
+                # ---------------------------------------------------------
+                # THE FIX: Always use Hard 1-Hot for Autoregressive Feedback
+                # ---------------------------------------------------------
+                # Whether training or evaluating, the model must see the exact
+                # same binary state transitions it will see in production.
+                dropped_idx = torch.argmax(dropped_t, dim=-1, keepdim=True)
+                hard_drop_pred = torch.zeros_like(dropped_t).scatter_(-1, dropped_idx, 1.0)
+
+                # We detach the entire AR input to prevent BPTT from looping back
+                # through the inputs, which causes exploding gradients. The loss
+                # function will still handle the gradients for the drop accuracy!
+                curr_ar_input = torch.cat([pred_delta, curr_cumulative, hard_drop_pred], dim=-1).detach()
+                prev_cumulative = curr_cumulative.detach()
+
+        # Stack lists back into tensors
+        backlog_out = torch.cat(backlog_outputs, dim=1)
+        dropped_out = torch.cat(dropped_outputs, dim=1)
+
+        return backlog_out, dropped_out, hidden
+
+
+    def forward_std(self, x, hidden, ar_x=None, teacher_forcing_ratio=0.0):
         """
         x: (batch, seq_len, 4) - Standard external inputs
         ar_x: (batch, seq_len, 3) - Shifted ground truth outputs (for teacher forcing)
@@ -78,17 +152,20 @@ class NonManualRNNAR(LinkEmuModelAR):
             if use_teacher_forcing:
                 curr_ar_input = ar_x[:, t:t + 1, :]
             else:
-                # Format model's own prediction to match the (batch, 1, 3) shape
-                if self.training:
-                    # Differentiable approximation for training
-                    dropped_pred = torch.softmax(dropped_t, dim=-1)
-                else:
-                    # Hard one-hot for pure inference
-                    dropped_idx = torch.argmax(dropped_t, dim=-1, keepdim=True)
-                    dropped_pred = torch.zeros_like(dropped_t).scatter_(-1, dropped_idx, 1.0)
+                # ---------------------------------------------------------
+                # NON-DELTAS AUTOREGRESSIVE FEEDBACK
+                # ---------------------------------------------------------
+                # 1. The backlog prediction is already the absolute value
+                # (backlog_t = combined_out[:, :, 0:1] from earlier in the loop)
 
-                # Concatenate the real backlog value and the classification prediction, then detach
-                curr_ar_input = torch.cat([backlog_t, dropped_pred], dim=-1).detach()
+                # 2. Convert the raw drop logits into a hard 1-hot vector
+                dropped_idx = torch.argmax(dropped_t, dim=-1, keepdim=True)
+                hard_drop_pred = torch.zeros_like(dropped_t).scatter_(-1, dropped_idx, 1.0)
+
+                # 3. Concatenate and detach to prevent exploding gradients
+                # The gradient will NOT flow backward through this input,
+                # but the loss function still gets the raw logits to train on!
+                curr_ar_input = torch.cat([backlog_t, hard_drop_pred], dim=-1).detach()
 
         # Stack lists back into tensors
         backlog_out = torch.cat(backlog_outputs, dim=1)
@@ -96,10 +173,13 @@ class NonManualRNNAR(LinkEmuModelAR):
 
         return backlog_out, dropped_out, hidden
 
+    def get_model_name(self):
+        return super().get_model_name()
+
     def new_instance(self):
         return self.__class__(input_size=self.input_size, hidden_size=self.hidden_size, num_layers=self.num_layers,
                               learning_rate=self.learning_rate, nonlinearity=self.nonlinearity,
-                              dropout_rate=self.dropout_rate)
+                              dropout_rate=self.dropout_rate, use_deltas=self.use_deltas)
 
     def new_hidden_tensor(self, batch_size, device=None):
         return torch.zeros(self.num_layers, batch_size, self.hidden_size).to(device)

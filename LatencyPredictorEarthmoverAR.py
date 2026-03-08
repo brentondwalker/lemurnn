@@ -22,11 +22,12 @@ class LatencyPredictorEarthmoverAR(LatencyPredictor):
 
     def __init__(self, model:LinkEmuModel, trace_generator: TraceGenerator,
                  device=None, seed=None, loadpath=None, track_grad=False,
-                 drop_masking=False, wandb_run=None):
+                 drop_masking=False, wandb_run=None, use_deltas=False):
         """
         Use earthmover distance as a metric to compare drop predictions.
         """
         self.earthmover_p = 1
+        self.use_deltas = use_deltas
         super().__init__(model, trace_generator, device=device, seed=seed, loadpath=loadpath, track_grad=track_grad, drop_masking=drop_masking, wandb_run=wandb_run)
 
 
@@ -46,7 +47,8 @@ class LatencyPredictorEarthmoverAR(LatencyPredictor):
         training_history_filename = f"{self.training_directory}/training_history.json"
 
         # train fast (teacher-forcing) for 80% of the epochs
-        burn_in_epochs = int(n_epochs * 0.8)
+        #burn_in_epochs = int(n_epochs * 0.8)
+        burn_in_epochs = 0
 
         #self.optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
         criterion_backlog = nn.L1Loss()
@@ -107,18 +109,35 @@ class LatencyPredictorEarthmoverAR(LatencyPredictor):
                     # --- MODIFIED ---
                     X_batch, y_batch = X_batch.to(self.device), y_batch.to(self.device)
 
-                    # 1. ADDED: Construct shifted autoregressive inputs (ar_x) for Teacher Forcing
-                    # One-hot encode the dropped targets to match the 2-class output shape
-                    dropped_target_oh = F.one_hot(y_batch[:, :, 1].long(), num_classes=2).float()
-                    # Combine backlog (1) + dropped (2) = 3 features
-                    target_ar = torch.cat([y_batch[:, :, 0:1], dropped_target_oh], dim=-1)
+                    if self.use_deltas:
+                        # ---------------------------------------------------------
+                        # MODIFIED: 4-Feature Autoregressive Input (Delta + Cumulative + Drops)
+                        # ---------------------------------------------------------
+                        # 1. Calculate the exact step-to-step delta in the ground truth backlog
+                        # For the very first step, the "delta" is just the first backlog value itself
+                        delta_target = torch.cat([y_batch[:, 0:1, 0:1], y_batch[:, 1:, 0:1] - y_batch[:, :-1, 0:1]], dim=1)
 
-                    # Shift right by 1 to represent "previous" outputs (first step gets zeros)
-                    ar_x = torch.zeros_like(target_ar)
-                    ar_x[:, 1:, :] = target_ar[:, :-1, :]
+                        # 2. Combine Delta (1), Cumulative (1), and One-Hot Drops (2) into a 4-feature tensor
+                        target_ar = torch.cat([delta_target, y_batch[:, :, 0:1],
+                             F.one_hot(y_batch[:, :, 1].long(), num_classes=2).float()], dim=-1)
 
-                    # 2. CHANGED: Forward pass with 100% Teacher Forcing
-                    backlog_pred, dropped_pred, hidden = self.model(X_batch, hidden, ar_x=ar_x, teacher_forcing_ratio=1.0)
+                        # 3. Shift everything right by 1 time step to create the "previous" ground truth inputs
+                        ar_x = torch.cat([torch.zeros_like(target_ar[:, 0:1, :]), target_ar[:, :-1, :]], dim=1)
+                        #print(f"LPEMAR: delta_target: {delta_target}\t target_ar: {target_ar}\t ar_x:{ar_x}")
+                        # ---------------------------------------------------------
+                    else:
+                        # 1. ADDED: Construct shifted autoregressive inputs (ar_x) for Teacher Forcing
+                        # One-hot encode the dropped targets to match the 2-class output shape
+                        dropped_target_oh = F.one_hot(y_batch[:, :, 1].long(), num_classes=2).float()
+                        # Combine backlog (1) + dropped (2) = 3 features
+                        target_ar = torch.cat([y_batch[:, :, 0:1], dropped_target_oh], dim=-1)
+
+                        # Shift right by 1 to represent "previous" outputs (first step gets zeros)
+                        ar_x = torch.zeros_like(target_ar)
+                        ar_x[:, 1:, :] = target_ar[:, :-1, :]
+
+                    # 2. CHANGED: Forward pass with decreasing teacher forcing (scheduled sampling)
+                    backlog_pred, dropped_pred, hidden = self.model(X_batch, hidden, ar_x=ar_x, teacher_forcing_ratio=teacher_forcing_ratio)
 
                     backlog_target = y_batch[:, :, 0].unsqueeze(-1)  # Shape: [batch_size, seq_length, 1]
                     dropped_target = y_batch[:, :, 1].long()  # Shape: [batch_size, seq_length] (for CrossEntropyLoss)

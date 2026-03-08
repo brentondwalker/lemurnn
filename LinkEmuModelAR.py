@@ -13,7 +13,7 @@ from LinkEmuModel import LinkEmuModel
 
 class LinkEmuModelAR(LinkEmuModel):
 
-    def __init__(self, input_size=4, hidden_size=2, num_layers=1, learning_rate=0.001, dropout_rate=0.0, loadpath=None):
+    def __init__(self, input_size=4, hidden_size=2, num_layers=1, learning_rate=0.001, dropout_rate=0.0, loadpath=None, use_deltas=False):
         super(LinkEmuModelAR, self).__init__()
         #self.model_name = "none"
         self.input_size:int = input_size
@@ -24,6 +24,7 @@ class LinkEmuModelAR(LinkEmuModel):
         if loadpath:
             print(f"loading model from {loadpath}")
             self.load_model_properties(loadpath)
+        self.use_deltas = use_deltas
         self.optimizer: optim.Optimizer = None
         self.training_directory = None
         self.seed:int = None
