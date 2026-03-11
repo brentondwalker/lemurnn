@@ -168,7 +168,7 @@ def main():
         if autoregressive:
             model: LinkEmuModel = DropLSTMAR(input_size=trace_generator.input_size(),
                                              hidden_size=hidden_size, num_layers=num_layers,
-                                             learning_rate=learning_rate, dropout_rate=dropout_rate)
+                                             learning_rate=learning_rate, dropout_rate=dropout_rate, use_deltas=use_deltas)
         else:
             model: LinkEmuModel = DropLSTM(input_size=trace_generator.input_size(),
                                            hidden_size=hidden_size, num_layers=num_layers,
@@ -178,7 +178,7 @@ def main():
         if autoregressive:
             model: LinkEmuModel = DropGRUAR(input_size=trace_generator.input_size(),
                                             hidden_size=hidden_size, num_layers=num_layers,
-                                            learning_rate=learning_rate, dropout_rate=dropout_rate)
+                                            learning_rate=learning_rate, dropout_rate=dropout_rate, use_deltas=use_deltas)
         else:
             model: LinkEmuModel = DropGRU(input_size=trace_generator.input_size(),
                                           hidden_size=hidden_size, num_layers=num_layers,
