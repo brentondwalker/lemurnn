@@ -6,7 +6,7 @@ from LinkEmuModelAR import LinkEmuModelAR
 class NonManualRNNAR(LinkEmuModelAR):
     def __init__(self, input_size=4, hidden_size=2, num_layers=1, learning_rate=0.001, loadpath=None,
                  nonlinearity='relu', dropout_rate=0.0, use_deltas=False):
-        self.model_name = f"drop{nonlinearity}rnn_ar{"d" if use_deltas else ""}"
+        self.model_name = f"drop{nonlinearity}rnn_ar{'d' if use_deltas else ''}"
         self.nonlinearity = nonlinearity
 
         # Define the size of the autoregressive feedback (1 backlog + 2 dropped)
