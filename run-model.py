@@ -18,57 +18,86 @@ def main():
     #num layers
     parser = argparse.ArgumentParser()
     parser.add_argument("-m", '--model', type=str, default=None)
+    parser.add_argument("-w", '--wandb_run', type=str, default=None)
     parser.add_argument("-l", '--num_layers', type=int, default=1)
     parser.add_argument("-s", '--hidden_size', type=int, default=8)
     parser.add_argument('--seq_len', type=int, default=128)
     parser.add_argument('--dag_data', type=str, action='append', default=None)
     parser.add_argument('--data_seed', type=int, default=None)
-    parser.add_argument('--link_properties', type=str, default='default')
+    parser.add_argument('--link_properties', type=str, default='daglike')
+    parser.add_argument('--traffic', type=str, action='append', default=None)
     parser.add_argument('--codel', action='store_true')
     parser.add_argument('--packetqueue', action='store_true')
     parser.add_argument('--lstm', action='store_true')
+    parser.add_argument('--gru', action='store_true')
     parser.add_argument('--normalize', action='store_true')
+    parser.add_argument('--normalize_earthmover', action='store_true', default=False)
+    parser.add_argument('--autoregressive', action='store_true')
+    parser.add_argument('--use_deltas', action='store_true')
+
 
     args = parser.parse_args()
 
     model_file = args.model
+    wandb_run = args.wandb_run
     num_layers = args.num_layers
     hidden_size = args.hidden_size
     seq_len = args.seq_len
     use_lstm = args.lstm
     normalize = args.normalize
-    sample_data = args.dag_data
+    normalize_earthmover = args.normalize_earthmover
+    dag_data = args.dag_data
     link_properties_str = args.link_properties
     data_seed = args.data_seed
     codel = args.codel
     packetqueue = args.packetqueue
+    traffic_types = args.traffic
+    if traffic_types is None:
+        traffic_types = ['exponential']
 
     link_properties = link_properties_library[link_properties_str]
 
-    # load the data sample
-    if sample_data:
-        trace_generator = TraceGeneratorDagData(link_properties, normalize=normalize, datadirs=sample_data)
+    # Check if GPU is available
+    if torch.cuda.is_available():
+        device = torch.device("cuda")  # Use the first GPU
+        print("GPU is available.")
+    else:
+        device = torch.device("cpu")  # Use CPU
+        print("Using CPU.")
+
+    trace_generator = None
+    if dag_data:
+        # assign fixed value to packet size, because that will be used to rescale the predictions
+        link_properties[0].max_pkt_size = 1000
+        link_properties[0].min_pkt_size = 1000
+        trace_generator = TraceGeneratorDagData(link_properties, normalize=normalize, datadirs=dag_data)
     elif packetqueue:
-        trace_generator = TraceGeneratorPacketQueue(link_properties, normalize=normalize)
+        trace_generator = TraceGeneratorPacketQueue(link_properties, normalize=normalize, traffic_types=traffic_types)
     elif codel:
         trace_generator = TraceGeneratorCodel(link_properties, normalize=normalize, base_interval=10, codel_threshold=5)
     else:
-        trace_generator = TraceGeneratorByteQueue(link_properties, normalize=normalize)
+        # default is ByteQueue
+        # trace_generator = TraceGenerator(link_properties, normalize=normalize)
+        trace_generator = TraceGeneratorByteQueue(link_properties, normalize=normalize, traffic_types=traffic_types)
 
     if data_seed:
         np.random.seed(data_seed)
-    trace_sample = trace_generator.generate_trace_sample(seq_len)
+    trace_sample = trace_generator.generate_trace_sample(link_properties, traffic_types[0], seq_len)
     input_v, output_v = trace_generator.feature_vector_from_sample(trace_sample)
 
     # load the model
-    model = torch.jit.load(model_file)
+    if wandb_run:
+        model = LinkEmuModel.load_model_wandb(wandb_run, device)
+    else:
+        model = torch.jit.load(model_file)
     model.eval()
 
     # run the inputs through the model
     batch_size = 1
-    hidden = torch.zeros(num_layers, batch_size, hidden_size)
-    if use_lstm:
-        hidden = (hidden, torch.zeros(num_layers, batch_size, hidden_size))
+    #hidden = torch.zeros(num_layers, batch_size, hidden_size)
+    #if use_lstm:
+    #    hidden = (hidden, torch.zeros(num_layers, batch_size, hidden_size))
+    hidden = model.new_hidden_tensor(batch_size, device)
     dataX = torch.tensor(input_v, dtype=torch.float32).unsqueeze(dim=0)
     dataY = torch.tensor(output_v, dtype=torch.float32).unsqueeze(dim=0)
     trace_generator.print_means(dataX, dataY)
@@ -149,8 +178,8 @@ def main():
         tensor_w1 = torch.from_numpy(real_dropped_status.astype(dtype=np.float64))
         tensor_w2 = torch.from_numpy(pred_dropped_status.astype(dtype=np.float64))
         print("\n\nWasserstein Results:")
-        emp1_loss = torch.sum(stats_loss.symmetric_earthmover(tensor_w1, tensor_w2, p=1, normalize=True))
-        emp2_loss = torch.sum(stats_loss.symmetric_earthmover(tensor_w1, tensor_w2, p=2, normalize=True))
+        emp1_loss = torch.sum(stats_loss.symmetric_earthmover(tensor_w1, tensor_w2, p=1, normalize=normalize_earthmover))
+        emp2_loss = torch.sum(stats_loss.symmetric_earthmover(tensor_w1, tensor_w2, p=2, normalize=normalize_earthmover))
         print(f"Symmetric earthmover loss p1: {emp1_loss}\tp2: {emp2_loss}")
         print("Wasserstein loss", stats_loss.torch_wasserstein_loss(tensor_w1, tensor_w2).data,
               stats_loss.torch_wasserstein_loss(tensor_w1, tensor_w2).requires_grad)
