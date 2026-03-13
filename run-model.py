@@ -3,6 +3,7 @@
 import argparse
 from LinkProperties import link_properties_library
 from LatencyPredictor import *
+import pytorch_stats_loss as stats_loss
 from TraceGeneratorByteQueue import TraceGeneratorByteQueue
 from TraceGeneratorCodel import TraceGeneratorCodel
 from TraceGeneratorDagData import TraceGeneratorDagData
