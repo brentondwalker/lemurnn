@@ -1,9 +1,11 @@
 import dataclasses
 import json
+import random
 from copy import deepcopy
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 import pytorch_stats_loss as stats_loss
 from LatencyPredictor import LatencyPredictor, TrainingRecord, GradientTracker
 from LinkEmuModel import LinkEmuModel
@@ -16,19 +18,20 @@ class LatencyPredictorEarthmoverAR(LatencyPredictor):
     and predicts its latency and drop status.
     """
 
-    trainer_name = "trainer_bxe1"
+    trainer_name = "trainer_bxe1_ar"
 
     model_type = 'rnnearthmover'
 
     def __init__(self, model:LinkEmuModel, trace_generator: TraceGenerator,
                  device=None, seed=None, loadpath=None, track_grad=False,
-                 drop_masking=False, wandb_run=None, use_deltas=False):
+                 drop_masking=False, wandb_run=None, use_deltas=False, tb_chunk_size=None):
         """
         Use earthmover distance as a metric to compare drop predictions.
         """
         self.earthmover_p = 1
         self.use_deltas = use_deltas
-        super().__init__(model, trace_generator, device=device, seed=seed, loadpath=loadpath, track_grad=track_grad, drop_masking=drop_masking, wandb_run=wandb_run)
+        super().__init__(model, trace_generator, device=device, seed=seed, loadpath=loadpath, track_grad=track_grad,
+                         drop_masking=drop_masking, wandb_run=wandb_run, tb_chunk_size=tb_chunk_size)
 
 
     def get_extra_model_properties(self):
@@ -41,8 +44,8 @@ class LatencyPredictorEarthmoverAR(LatencyPredictor):
 
     def train(self, learning_rate=0.001, n_epochs=1, loss_file=None, ads_loss_interval=0):
         self.set_training_directory(create=True)
-        self.learning_rate = learning_rate
         self.model.save_model_properties()
+        previous_lr = self.model.optimizer.param_groups[0]['lr']
         training_log_filename = f"{self.training_directory}/training_log.dat"
         training_history_filename = f"{self.training_directory}/training_history.json"
 
@@ -55,6 +58,17 @@ class LatencyPredictorEarthmoverAR(LatencyPredictor):
         criterion_dropped = nn.CrossEntropyLoss()
         #testmodel = NonManualRNN(input_size=self.input_size, hidden_size=self.hidden_size, num_layers=self.num_layers).to(self.device)
         testmodel = self.model.new_instance().to(self.device)
+
+        # Initialize the Learning Rate Scheduler
+        # We assume self.model.optimizer is already initialized (e.g. Adam)
+        scheduler = ReduceLROnPlateau(
+            self.model.optimizer,
+            mode='min',  # We want the validation loss to minimize
+            factor=0.5,  # Halve the learning rate (multiply by 0.5) when stuck
+            patience=15,  # Wait 15 epochs of no improvement before dropping the LR
+            min_lr=1e-6  # Never drop the learning rate below this floor
+        )
+
         ads_loss = {0: 0, 1: 0, 2: 0, 4: 0, 8: 0, 16: 0}
         grad_tracker_backlog = GradientTracker('backlog', self.training_directory, track_grad=self.track_grad)
         grad_tracker_dropped = GradientTracker('dropped', self.training_directory, track_grad=self.track_grad)
@@ -96,12 +110,27 @@ class LatencyPredictorEarthmoverAR(LatencyPredictor):
             new_best_model = False
             self.model.train()  # Set to training mode
             train_loss, train_backlog_loss, train_dropped_loss, train_droprate_loss, train_em_loss = 0, 0, 0, 0, 0
-            num_train_samples = 0
+            num_train_steps = 0
             batch_size = 0
-            for loader in self.trace_generator.get_loader_iterator('train'):
-                for X_batch, y_batch in loader:
+
+            # Interleaved Random Batching Across Sequence Lengths
+            train_loaders = list(self.trace_generator.get_loader_iterator('train'))
+            active_iterators = [iter(loader) for loader in train_loaders]
+
+            while active_iterators:
+                # Randomly select one of the remaining active loaders
+                idx = random.randrange(len(active_iterators))
+
+                try:
+                    # Draw exactly one batch from the chosen loader
+                    X_batch, y_batch = next(active_iterators[idx])
+
                     #print(X_batch.shape, y_batch.shape)
                     batch_size, seq_length, _ = X_batch.size()
+
+                    # Track samples dynamically (replaces the old len(loader) math)
+                    num_train_steps += 1
+
                     hidden = self.model.new_hidden_tensor(batch_size, self.device)
 
                     ###X_batch, y_batch = X_batch.to(self.device), y_batch.to(self.device)
@@ -111,22 +140,22 @@ class LatencyPredictorEarthmoverAR(LatencyPredictor):
 
                     if self.use_deltas:
                         # ---------------------------------------------------------
-                        # MODIFIED: 4-Feature Autoregressive Input (Delta + Cumulative + Drops)
+                        # 4-Feature Autoregressive Input (Delta + Cumulative + Drops)
                         # ---------------------------------------------------------
-                        # 1. Calculate the exact step-to-step delta in the ground truth backlog
+                        # Calculate the exact step-to-step delta in the ground truth backlog
                         # For the very first step, the "delta" is just the first backlog value itself
                         delta_target = torch.cat([y_batch[:, 0:1, 0:1], y_batch[:, 1:, 0:1] - y_batch[:, :-1, 0:1]], dim=1)
 
-                        # 2. Combine Delta (1), Cumulative (1), and One-Hot Drops (2) into a 4-feature tensor
+                        # Combine Delta (1), Cumulative (1), and One-Hot Drops (2) into a 4-feature tensor
                         target_ar = torch.cat([delta_target, y_batch[:, :, 0:1],
                              F.one_hot(y_batch[:, :, 1].long(), num_classes=2).float()], dim=-1)
 
-                        # 3. Shift everything right by 1 time step to create the "previous" ground truth inputs
+                        # Shift everything right by 1 time step to create the "previous" ground truth inputs
                         ar_x = torch.cat([torch.zeros_like(target_ar[:, 0:1, :]), target_ar[:, :-1, :]], dim=1)
                         #print(f"LPEMAR: delta_target: {delta_target}\t target_ar: {target_ar}\t ar_x:{ar_x}")
                         # ---------------------------------------------------------
                     else:
-                        # 1. ADDED: Construct shifted autoregressive inputs (ar_x) for Teacher Forcing
+                        # Construct shifted autoregressive inputs (ar_x) for Teacher Forcing
                         # One-hot encode the dropped targets to match the 2-class output shape
                         dropped_target_oh = F.one_hot(y_batch[:, :, 1].long(), num_classes=2).float()
                         # Combine backlog (1) + dropped (2) = 3 features
@@ -136,65 +165,85 @@ class LatencyPredictorEarthmoverAR(LatencyPredictor):
                         ar_x = torch.zeros_like(target_ar)
                         ar_x[:, 1:, :] = target_ar[:, :-1, :]
 
-                    # 2. CHANGED: Forward pass with decreasing teacher forcing (scheduled sampling)
-                    backlog_pred, dropped_pred, hidden = self.model(X_batch, hidden, ar_x=ar_x, teacher_forcing_ratio=teacher_forcing_ratio)
+                    ar_x_full = torch.cat([torch.zeros_like(target_ar[:, 0:1, :]), target_ar[:, :-1, :]], dim=1)
 
-                    backlog_target = y_batch[:, :, 0].unsqueeze(-1)  # Shape: [batch_size, seq_length, 1]
-                    dropped_target = y_batch[:, :, 1].long()  # Shape: [batch_size, seq_length] (for CrossEntropyLoss)
-                    dropped_pred_binary = torch.softmax(dropped_pred, dim=2)[:, :, 1]
-                    if self.drop_masking:
-                        # I want to make sure that the backlog grad contribution is zero for dropped packets
-                        # new more efficient way
-                        backlog_target = backlog_target * (1 - dropped_target.unsqueeze(dim=-1))
-                        backlog_pred = backlog_pred * (1 - dropped_target.unsqueeze(dim=-1))
+                    # implement TBPTT
+                    chunk_size = self.tb_chunk_size if self.tb_chunk_size is not None else seq_length
+                    for i in range(0, seq_length, chunk_size):
+                        # Slice the long sequence into a safe chunk
+                        X_chunk = X_batch[:, i:i+chunk_size, :]
+                        y_chunk = y_batch[:, i:i+chunk_size, :]
+                        ar_x_chunk = ar_x_full[:, i:i+chunk_size, :]
 
-                    backlog_loss = criterion_backlog(backlog_pred, backlog_target)
-                    dropped_loss = criterion_dropped(dropped_pred.view(-1, 2), dropped_target.view(-1))
-                    droprate_loss = torch.sum(
-                        torch.abs(torch.sum(y_batch[:, :, 1], dim=1) - torch.sum(dropped_pred_binary, dim=1)))
-                    emp_loss = torch.sum(stats_loss.symmetric_earthmover(y_batch[:, :, 1], dropped_pred_binary, p=self.earthmover_p, normalize=normalize_earthmover))
+                        # Detach hidden state to sever the BPTT graph
+                        if isinstance(hidden, tuple):
+                            hidden = tuple(h.detach() for h in hidden)
+                        else:
+                            hidden = hidden.detach()
 
-                    #print(droprate_loss.requires_grad, emp_loss.requires_grad)
-                    #loss = backlog_loss + droprate_loss + emp_loss
-                    #loss = backlog_loss + droprate_loss + dropped_loss + emp_loss
-                    loss = backlog_loss + dropped_loss + emp_loss
-                    train_loss += loss.item()
-                    train_backlog_loss += backlog_loss.item()
-                    train_dropped_loss += dropped_loss.item()
-                    train_droprate_loss += droprate_loss.item()
-                    train_em_loss += emp_loss.item()
+                        # Forward pass with decreasing teacher forcing (scheduled sampling)
+                        backlog_pred, dropped_pred, hidden = self.model(X_chunk, hidden, ar_x=ar_x_chunk, teacher_forcing_ratio=teacher_forcing_ratio)
 
-                    self.model.optimizer.zero_grad()  # Zero gradients
-                    #print("--------------------------------")
-                    #backlog_grads = torch.autograd.grad(outputs=backlog_loss, inputs=self.model.parameters(), retain_graph=True)
-                    grad_tracker_backlog.add(backlog_loss, self.model)
-                    #dropped_grads = torch.autograd.grad(dropped_loss, self.model.parameters(), retain_graph=True)
-                    grad_tracker_dropped.add(dropped_loss, self.model)
-                    #droprate_grads = torch.autograd.grad(droprate_loss, self.model.parameters(), retain_graph=True)
-                    grad_tracker_droprate.add(droprate_loss, self.model)
-                    #emp_grads = torch.autograd.grad(emp_loss, self.model.parameters(), retain_graph=True)
-                    grad_tracker_emp.add(emp_loss, self.model)
+                        backlog_target = y_chunk[:, :, 0].unsqueeze(-1)  # Shape: [batch_size, chunk_size?, 1]
+                        dropped_target = y_chunk[:, :, 1].long()  # Shape: [batch_size, chunk_size?] (for CrossEntropyLoss)
+                        dropped_pred_binary = torch.softmax(dropped_pred, dim=2)[:, :, 1]
+                        if self.drop_masking:
+                            # I want to make sure that the backlog grad contribution is zero for dropped packets
+                            # new more efficient way
+                            backlog_target = backlog_target * (1 - dropped_target.unsqueeze(dim=-1))
+                            backlog_pred = backlog_pred * (1 - dropped_target.unsqueeze(dim=-1))
 
-                    self.model.optimizer.zero_grad()  # Zero gradients
-                    loss.backward()  # Backpropagation
-                    self.model.optimizer.step()  # Update parameters
+                        backlog_loss = criterion_backlog(backlog_pred, backlog_target)
+                        dropped_loss = criterion_dropped(dropped_pred.view(-1, 2), dropped_target.view(-1))
+                        droprate_loss = torch.mean(
+                            torch.abs(torch.sum(y_chunk[:, :, 1], dim=1) - torch.sum(dropped_pred_binary, dim=1)))
+                        emp_loss = torch.mean(stats_loss.symmetric_earthmover(y_chunk[:, :, 1], dropped_pred_binary, p=self.earthmover_p, normalize=normalize_earthmover))
 
-                num_train_samples += len(loader) * batch_size
-            train_loss /= num_train_samples
-            train_backlog_loss /= num_train_samples
-            train_dropped_loss /= num_train_samples
-            train_droprate_loss /= num_train_samples
-            train_em_loss /= num_train_samples
+                        #print(droprate_loss.requires_grad, emp_loss.requires_grad)
+                        #loss = backlog_loss + droprate_loss + emp_loss
+                        #loss = backlog_loss + droprate_loss + dropped_loss + emp_loss
+                        loss = backlog_loss + dropped_loss + emp_loss
+                        train_loss += loss.item()
+                        train_backlog_loss += backlog_loss.item()
+                        train_dropped_loss += dropped_loss.item()
+                        train_droprate_loss += droprate_loss.item()
+                        train_em_loss += emp_loss.item()
+
+                        self.model.optimizer.zero_grad()  # Zero gradients
+                        #print("--------------------------------")
+                        #backlog_grads = torch.autograd.grad(outputs=backlog_loss, inputs=self.model.parameters(), retain_graph=True)
+                        grad_tracker_backlog.add(backlog_loss, self.model)
+                        #dropped_grads = torch.autograd.grad(dropped_loss, self.model.parameters(), retain_graph=True)
+                        grad_tracker_dropped.add(dropped_loss, self.model)
+                        #droprate_grads = torch.autograd.grad(droprate_loss, self.model.parameters(), retain_graph=True)
+                        grad_tracker_droprate.add(droprate_loss, self.model)
+                        #emp_grads = torch.autograd.grad(emp_loss, self.model.parameters(), retain_graph=True)
+                        grad_tracker_emp.add(emp_loss, self.model)
+
+                        self.model.optimizer.zero_grad()  # Zero gradients
+                        loss.backward()  # Backpropagation
+                        self.model.optimizer.step()  # Update parameters
+
+                except StopIteration:
+                    # This specific length's loader has run out of batches for the epoch.
+                    # Remove it from the active list.
+                    active_iterators.pop(idx)
+
+            train_loss /= num_train_steps
+            train_backlog_loss /= num_train_steps
+            train_dropped_loss /= num_train_steps
+            train_droprate_loss /= num_train_steps
+            train_em_loss /= num_train_steps
 
             train_loss_details = {'backlog_loss': train_backlog_loss,
                                   'dropped_loss': train_dropped_loss,
                                   'droprate_loss': train_droprate_loss,
                                   'train_em_loss': train_em_loss}
 
-            grad_tracker_backlog.write(self.epoch, num_samples=num_train_samples)
-            grad_tracker_dropped.write(self.epoch, num_samples=num_train_samples)
-            grad_tracker_droprate.write(self.epoch, num_samples=num_train_samples)
-            grad_tracker_emp.write(self.epoch, num_samples=num_train_samples)
+            grad_tracker_backlog.write(self.epoch, num_samples=num_train_steps)
+            grad_tracker_dropped.write(self.epoch, num_samples=num_train_steps)
+            grad_tracker_droprate.write(self.epoch, num_samples=num_train_steps)
+            grad_tracker_emp.write(self.epoch, num_samples=num_train_steps)
 
             # Validation step
             self.model.eval()
@@ -224,9 +273,9 @@ class LatencyPredictorEarthmoverAR(LatencyPredictor):
 
                     val_backlog_loss = criterion_backlog(backlog_pred_val * output_scale, backlog_target_val * output_scale)
                     val_dropped_loss = criterion_dropped(dropped_pred_val.view(-1, 2), dropped_target_val.view(-1))
-                    val_droprate_loss = torch.sum(
+                    val_droprate_loss = torch.mean(
                         torch.abs(torch.sum(y_val[:, :, 1], dim=1) - torch.sum(dropped_pred_val_binary, dim=1)))
-                    val_em_loss = torch.sum(stats_loss.symmetric_earthmover(y_val[:, :, 1], dropped_pred_val_binary, normalize=normalize_earthmover))
+                    val_em_loss = torch.mean(stats_loss.symmetric_earthmover(y_val[:, :, 1], dropped_pred_val_binary, normalize=normalize_earthmover))
                     #val_loss += (val_backlog_loss + val_droprate_loss + val_em_loss).item()
                     val_loss += (val_backlog_loss + val_em_loss).item()
                     v_backlog_loss += val_backlog_loss.item()
@@ -234,12 +283,12 @@ class LatencyPredictorEarthmoverAR(LatencyPredictor):
                     v_droprate_loss += val_droprate_loss.item()
                     v_em_loss += val_em_loss.item()
 
-            num_val_samples = len(loader) * batch_size_val
-            val_loss /= num_val_samples
-            v_backlog_loss /= num_val_samples
-            v_dropped_loss /= num_val_samples
-            v_droprate_loss /= num_val_samples
-            v_em_loss /= num_val_samples # XXX not done in notebook
+            num_val_steps = len(loader)
+            val_loss /= num_val_steps
+            v_backlog_loss /= num_val_steps
+            v_dropped_loss /= num_val_steps
+            v_droprate_loss /= num_val_steps
+            v_em_loss /= num_val_steps # XXX not done in notebook
 
             # Check if the current model is the best
             if val_loss < self.best_loss:
@@ -269,7 +318,7 @@ class LatencyPredictorEarthmoverAR(LatencyPredictor):
                 testmodel.eval()  # Ensure evaluation mode
 
                 with torch.no_grad():
-                    total_num_test_samples = 0
+                    total_num_test_steps = 0
                     for traffic_type in self.trace_generator.test_traffic_types:
                         testp_loss, tp_backlog_loss, tp_backlog_loss_n, tp_dropped_loss = 0, 0, 0, 0
                         tp_dropped_em1_loss, tp_dropped_em2_loss, tp_dropped_em15_loss, tp_dropped_emp_loss = 0, 0, 0, 0
@@ -305,12 +354,12 @@ class LatencyPredictorEarthmoverAR(LatencyPredictor):
                             tp_backlog_loss += backlog_loss_test.item()
                             tp_backlog_loss_n += backlog_loss_test_n.item()
                             tp_dropped_loss += dropped_loss_test.item()
-                            tp_dropped_em1_loss += torch.sum(stats_loss.symmetric_earthmover(y_test[:, :, 1], dropped_pred_test_binary, p=1, normalize=False)).item()
-                            tp_dropped_em2_loss += torch.sum(stats_loss.symmetric_earthmover(y_test[:, :, 1], dropped_pred_test_binary, p=2, normalize=False)).item()
-                            tp_dropped_em15_loss += torch.sum(stats_loss.symmetric_earthmover(y_test[:, :, 1], dropped_pred_test_binary, p=1.5, normalize=False)).item()
-                            tp_dropped_emp_loss += torch.sum(stats_loss.symmetric_earthmover(y_test[:, :, 1], dropped_pred_test_binary, p=self.earthmover_p, normalize=False)).item()
+                            tp_dropped_em1_loss += torch.mean(stats_loss.symmetric_earthmover(y_test[:, :, 1], dropped_pred_test_binary, p=1, normalize=False)).item()
+                            tp_dropped_em2_loss += torch.mean(stats_loss.symmetric_earthmover(y_test[:, :, 1], dropped_pred_test_binary, p=2, normalize=False)).item()
+                            tp_dropped_em15_loss += torch.mean(stats_loss.symmetric_earthmover(y_test[:, :, 1], dropped_pred_test_binary, p=1.5, normalize=False)).item()
+                            tp_dropped_emp_loss += torch.mean(stats_loss.symmetric_earthmover(y_test[:, :, 1], dropped_pred_test_binary, p=self.earthmover_p, normalize=False)).item()
 
-                            tp_droprate_loss += torch.sum(torch.abs(
+                            tp_droprate_loss += torch.mean(torch.abs(
                                 torch.sum(y_test[:, :, 1], dim=1) - torch.sum(dropped_pred_test_binary, dim=1))).item()
                             #print(dropped_pred_test_binary.shape, y_test[0, :, 1].shape)
                             if ads_loss_interval > 0 and ads_new_model and (self.epoch % ads_loss_interval) == 0:
@@ -335,37 +384,38 @@ class LatencyPredictorEarthmoverAR(LatencyPredictor):
                         t_droprate_loss += tp_droprate_loss
 
                         # compute test stats for just this traffic type
-                        num_test_samples = len(loader) * batch_size_test
-                        total_num_test_samples += num_test_samples
-                        tp_backlog_loss /= num_test_samples
-                        tp_backlog_loss_n /= num_test_samples
-                        tp_dropped_loss /= num_test_samples
-                        tp_dropped_em1_loss /= num_test_samples
-                        tp_dropped_em2_loss /= num_test_samples
-                        tp_dropped_em15_loss /= num_test_samples
-                        tp_dropped_emp_loss /= num_test_samples
-                        tp_droprate_loss /= num_test_samples
+                        num_test_steps = len(loader)
+                        total_num_test_steps += num_test_steps
+                        tp_backlog_loss /= (num_test_steps * 64)
+                        tp_backlog_loss_n /= (num_test_steps * 64)
+                        tp_dropped_loss /= (num_test_steps * 64)
+                        tp_dropped_em1_loss /= num_test_steps
+                        tp_dropped_em2_loss /= num_test_steps
+                        tp_dropped_em15_loss /= num_test_steps
+                        tp_dropped_emp_loss /= num_test_steps
+                        tp_droprate_loss /= num_test_steps
                         test_p_loss = tp_backlog_loss + tp_dropped_emp_loss
                         test_set_losses[test_dataset_name] = {'total_loss':test_p_loss, 'backlog_loss':tp_backlog_loss,
                                                               'dropped_loss':tp_dropped_loss, 'em1_loss':tp_dropped_em1_loss}
                         #print(f"{test_dataset_name}:\t"+ "\t".join(f"{x:.4f}" for x in (test_p_loss, tp_backlog_loss, tp_dropped_em1_loss)))
 
-                t_backlog_loss /= num_test_samples
-                t_backlog_loss_n /= num_test_samples
-                t_dropped_loss /= num_test_samples
-                t_dropped_em1_loss /= num_test_samples
-                t_dropped_em2_loss /= num_test_samples
-                t_dropped_em15_loss /= num_test_samples
-                t_dropped_emp_loss /= num_test_samples
-                t_droprate_loss /= num_test_samples
+                # These first ones are *64 to keep the results comparable to the ones from before I fixed the loss scaling
+                t_backlog_loss /= (total_num_test_steps * 64)
+                t_backlog_loss_n /= (total_num_test_steps * 64)
+                t_dropped_loss /= (total_num_test_steps * 64)
+                t_dropped_em1_loss /= total_num_test_steps
+                t_dropped_em2_loss /= total_num_test_steps
+                t_dropped_em15_loss /= total_num_test_steps
+                t_dropped_emp_loss /= total_num_test_steps
+                t_droprate_loss /= total_num_test_steps
                 test_loss = t_backlog_loss + t_dropped_emp_loss
             if new_best_model:
                 self.prediction_plot(test_index=0, data_set_name='test', display_plot=False, save_png=True, print_stats=False, file_suffix=f"_epoch{self.epoch}")
             if ads_loss_interval > 0 and ads_new_model and (self.epoch % ads_loss_interval) == 0:
-                ads_loss[0] /= num_test_samples
+                ads_loss[0] /= num_test_steps
                 radius = 1
                 for p in range(5):
-                    ads_loss[radius] /= num_test_samples
+                    ads_loss[radius] /= num_test_steps
                     radius *= 2
             ads_str = "\t".join(f"{x:.4f}" for x in (ads_loss[0], ads_loss[1], ads_loss[2], ads_loss[4], ads_loss[8], ads_loss[16]))
 
@@ -385,14 +435,30 @@ class LatencyPredictorEarthmoverAR(LatencyPredictor):
                 loss_rec = test_set_losses[test_dataset_name]
                 print(f"\t{test_dataset_name}\tLoss: {loss_rec['total_loss']:.4f}\tBLoss: {loss_rec['backlog_loss']:.4f}\tDLoss: {loss_rec['dropped_loss']:.4f}\tEM1Loss: {loss_rec['em1_loss']:.4f}")
             if self.track_grad:
-                print("\n".join([xx.get_str(num_samples=num_train_samples) for xx in [grad_tracker_backlog, grad_tracker_dropped, grad_tracker_droprate, grad_tracker_emp]]))
+                print("\n".join([xx.get_str(num_samples=num_train_steps) for xx in [grad_tracker_backlog, grad_tracker_dropped, grad_tracker_droprate, grad_tracker_emp]]))
 
             # get the current model parameters
             with open(training_log_filename, "a", buffering=1) as loss_file:
                 loss_file.write(
                     f"{self.epoch}\t{train_loss:.4f}\t{val_loss:.4f}\t{test_loss:.4f}\t{self.best_loss:.4f}\t{t_backlog_loss:.4f}\t{t_backlog_loss_n:.4f}\t{t_dropped_loss:.4f}\t{t_dropped_em1_loss:.4f}\t{t_dropped_em2_loss:.4f}\t{t_dropped_em15_loss:.4f}\t{t_droprate_loss:.4f}\t{ads_str}\t{self.best_model_epoch}\n")
 
-            self.training_history.append(TrainingRecord(self.epoch, self.learning_rate, self.best_model_file,
+            # ---------------------------------------------------------
+            # NEW: Step the scheduler and update the tracked learning rate
+            # ---------------------------------------------------------
+            # Tell the scheduler the current validation loss
+            scheduler.step(val_loss)
+
+            # Fetch the actual learning rate from the optimizer
+            # (in case the scheduler just reduced it)
+            current_lr = self.model.optimizer.param_groups[0]['lr']
+            if current_lr < previous_lr:
+                print("\n******************************************************")
+                print(f"\n📉 Validation loss plateaued! Dropping learning rate to {current_lr:.6e}\n")
+                previous_lr = current_lr
+            # ---------------------------------------------------------
+
+
+            self.training_history.append(TrainingRecord(self.epoch, current_lr, self.best_model_file,
                 train_loss, val_loss, test_loss,
                 train_loss_details, val_loss_details, test_loss_details))
             with open(training_history_filename, "a", buffering=1) as history_file:

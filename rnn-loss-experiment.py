@@ -61,6 +61,7 @@ def main():
     parser.add_argument('--kilo_val_samples', type=int, default=1)
     parser.add_argument('--kilo_test_samples', type=int, default=1)
     parser.add_argument('--seq_len', type=int, default=128)
+    parser.add_argument('--tb_chunk_size', type=int, default=None)
     parser.add_argument('--data_seed', type=int, default=None)
     parser.add_argument('--torch_seed', type=int, default=None)
     parser.add_argument("-r", '--learning_rate', type=float, default=0.001)
@@ -97,6 +98,7 @@ def main():
     kilo_val_samples = args.kilo_val_samples
     kilo_test_samples = args.kilo_test_samples
     seq_len = args.seq_len
+    tb_chunk_size = args.tb_chunk_size
     learning_rate = args.learning_rate
     dropout_rate = args.dropout_rate
     data_seed = args.data_seed
@@ -149,7 +151,12 @@ def main():
             trace_generator = TraceGeneratorByteQueue(link_properties, normalize=normalize, traffic_types=traffic_types)
 
     if multiloader:
-        trace_generator.create_multiloaders(1024*kilo_training_samples, [4, 8, 16, 32, 64, 128, 256],
+        seq_lengths_training = []
+        sl = 4
+        while sl <= seq_len:
+            seq_lengths_training.append(sl)
+            sl *= 2
+        trace_generator.create_multiloaders(1024*kilo_training_samples, seq_lengths_training,
                                        1024*kilo_val_samples, [seq_len],
                                        1024*kilo_test_samples, [seq_len],   #1024*kilo_test_samples, seq_len*2,
                                        seed=data_seed)
@@ -217,6 +224,7 @@ def main():
             'autoregressive':   autoregressive,
             'use_deltas':       use_deltas,
             'seq_len':          seq_len,
+            'tb_chunk_size':    tb_chunk_size,
             'data_seed':        data_seed,
             'torch_seed':       torch_seed,
             'training_directory': model.training_directory,
@@ -229,13 +237,13 @@ def main():
         if autoregressive:
             latency_predictor = LatencyPredictorEarthmoverAR(model, trace_generator=trace_generator, seed=torch_seed, drop_masking=drop_masking, wandb_run=wandb_run, use_deltas=use_deltas)
         else:
-            latency_predictor = LatencyPredictorEarthmover(model, trace_generator=trace_generator, seed=torch_seed, drop_masking=drop_masking, wandb_run=wandb_run)
+            latency_predictor = LatencyPredictorEarthmover(model, trace_generator=trace_generator, seed=torch_seed, drop_masking=drop_masking, wandb_run=wandb_run, tb_chunk_size=tb_chunk_size)
     elif energy:
         latency_predictor = LatencyPredictorEnergy(model, trace_generator=trace_generator, seed=torch_seed)
     else:
         latency_predictor = LatencyPredictor(model, trace_generator=trace_generator, seed=torch_seed)
 
-    latency_predictor.train(learning_rate=learning_rate, n_epochs=num_epochs, ads_loss_interval=ads_loss_interval)
+    latency_predictor.train(n_epochs=num_epochs, ads_loss_interval=ads_loss_interval)
 
     if wandb_run:
         wandb_run.finish()

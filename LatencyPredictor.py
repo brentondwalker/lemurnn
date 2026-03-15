@@ -92,7 +92,7 @@ class LatencyPredictor:
 
     def __init__(self, model:LinkEmuModel, trace_generator:TraceGenerator,
                  device=None, seed=None, loadpath=None, track_grad=False,
-                 drop_masking=False, wandb_run=None):
+                 drop_masking=False, wandb_run=None, tb_chunk_size=None):
         """
         XXX in the case of loadpath, we should load all the model info from the
         :param trace_generator:
@@ -115,6 +115,7 @@ class LatencyPredictor:
         self.model:LinkEmuModel = model.to(self.device)
         self.drop_masking = drop_masking
         self.wandb_run = wandb_run
+        self.tb_chunk_size = tb_chunk_size   # Truncated Backpropagation Through Time (TBPTT)
         if self.drop_masking:
             self.trainer_name += "_dropmask"
         if loadpath:
@@ -177,14 +178,12 @@ class LatencyPredictor:
         return "\t".join([str(ww) for ww in weights])
 
 
-    def train(self, learning_rate=0.001, n_epochs=1, loss_file=None, ads_loss_interval=0):
+    def train(self, n_epochs=1, loss_file=None, ads_loss_interval=0):
         self.set_training_directory(create=True)
-        self.learning_rate = learning_rate
         self.model.save_model_properties()
         training_log_filename = f"{self.training_directory}/training_log.dat"
         training_history_filename = f"{self.training_directory}/training_history.json"
 
-        #self.optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
         criterion_backlog = nn.L1Loss()
         criterion_dropped = nn.CrossEntropyLoss()
         #testmodel = NonManualRNN(input_size=self.input_size, hidden_size=self.hidden_size, num_layers=self.num_layers).to(self.device)
