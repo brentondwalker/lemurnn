@@ -108,15 +108,15 @@ class LatencyPredictorEarthmover(LatencyPredictor):
 
                     batch_size, seq_length, _ = X_batch.size()
 
-                    # Track samples dynamically (replaces the old len(loader) math)
-                    num_train_steps += 1
-
                     hidden = self.model.new_hidden_tensor(batch_size, self.device)
                     X_batch, y_batch = X_batch.to(self.device), y_batch.to(self.device)
 
                     # implement TBPTT
                     chunk_size = self.tb_chunk_size if self.tb_chunk_size is not None else seq_length
                     for i in range(0, seq_length, chunk_size):
+                        # Track samples dynamically (replaces the old len(loader) math)
+                        num_train_steps += 1
+
                         # ... [Keep your exact TBPTT chunking, forward pass, and backward pass here] ...
                         # Slice the long sequence into a safe chunk
                         X_chunk = X_batch[:, i:i + chunk_size, :]

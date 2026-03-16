@@ -76,9 +76,9 @@ class LatencyPredictorTTS(LatencyPredictor):
         criterion_backlog = nn.L1Loss()
         criterion_tts_bce = nn.BCELoss()
         criterion_dropped = nn.CrossEntropyLoss()
-        weight_backlog = 1.0
+        weight_backlog = 3.0
         weight_tts = 1.0
-        weight_droprate = 10.0
+        weight_droprate = 30
         testmodel = self.model.new_instance().to(self.device)
 
         scheduler = ReduceLROnPlateau(
@@ -131,13 +131,14 @@ class LatencyPredictorTTS(LatencyPredictor):
                 try:
                     X_batch, y_batch = next(active_iterators[idx])
                     batch_size, seq_length, _ = X_batch.size()
-                    num_train_steps += 1
 
                     hidden = self.model.new_hidden_tensor(batch_size, self.device)
                     X_batch, y_batch = X_batch.to(self.device), y_batch.to(self.device)
 
                     chunk_size = self.tb_chunk_size if self.tb_chunk_size is not None else seq_length
                     for i in range(0, seq_length, chunk_size):
+                        num_train_steps += 1
+
                         X_chunk = X_batch[:, i:i + chunk_size, :]
                         y_chunk = y_batch[:, i:i + chunk_size, :]
 
@@ -178,7 +179,8 @@ class LatencyPredictorTTS(LatencyPredictor):
                         #loss = backlog_loss + dropped_loss + tts_loss
                         #loss = backlog_loss + droprate_loss + tts_loss
                         #loss = (weight_backlog * backlog_loss) + (weight_tts * tts_loss) + (weight_droprate * droprate_loss)
-                        loss = (weight_backlog * backlog_loss) + (weight_tts * tts_loss)
+                        #loss = (weight_backlog * backlog_loss) + (weight_tts * tts_loss)
+                        loss = (weight_backlog * backlog_loss) + (weight_tts * tts_loss) + (weight_droprate * droprate_loss)
 
                         train_loss += loss.item()
                         train_backlog_loss += backlog_loss.item()
@@ -209,6 +211,8 @@ class LatencyPredictorTTS(LatencyPredictor):
                                   'dropped_loss': train_dropped_loss,
                                   'droprate_loss': train_droprate_loss,
                                   'train_tts_loss': train_tts_loss}
+
+            print(f"\n\ntrainloss: backlog: {train_backlog_loss}\t droprate: {train_droprate_loss}\t tts: {train_tts_loss}\n\n")
 
             grad_tracker_backlog.write(self.epoch, num_samples=num_train_steps)
             grad_tracker_dropped.write(self.epoch, num_samples=num_train_steps)
@@ -260,8 +264,8 @@ class LatencyPredictorTTS(LatencyPredictor):
 
                     #val_loss += (val_backlog_loss + val_tts_loss_step).item()
                     #val_loss += (val_backlog_loss + val_droprate_loss + val_tts_loss_step).item()
-                    #val_loss = ((weight_backlog * val_backlog_loss) + (weight_tts * val_tts_loss_step) + (weight_droprate * val_droprate_loss)).item()
-                    val_loss = ((weight_backlog * val_backlog_loss) + (weight_tts * val_tts_loss_step)).item()
+                    val_loss = ((weight_backlog * val_backlog_loss) + (weight_tts * val_tts_loss_step) + (weight_droprate * val_droprate_loss)).item()
+                    #val_loss = ((weight_backlog * val_backlog_loss) + (weight_tts * val_tts_loss_step)).item()
 
                     v_backlog_loss += val_backlog_loss.item()
                     v_dropped_loss += val_dropped_loss.item()
@@ -349,8 +353,10 @@ class LatencyPredictorTTS(LatencyPredictor):
                                 stats_loss.symmetric_earthmover(y_test[:, :, 1], dropped_pred_test_binary,
                                                                 p=self.earthmover_p, normalize=False)).item()
 
+                            #tp_droprate_loss += torch.mean(torch.abs(
+                            #    torch.sum(y_test[:, :, 1], dim=1) - torch.sum(dropped_pred_test_binary, dim=1))).item()
                             tp_droprate_loss += torch.mean(torch.abs(
-                                torch.sum(y_test[:, :, 1], dim=1) - torch.sum(dropped_pred_test_binary, dim=1))).item()
+                                torch.mean(y_test[:, :, 1].float(), dim=1) - torch.mean(dropped_pred_test_binary.float(), dim=1))).item()
 
                             # Track the new TTS metric alongside them
                             #dropped_target_test_smeared = self.get_smeared_drops(y_test[:, :, 1].float(), window_size=self.tts_window_size)
