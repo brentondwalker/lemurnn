@@ -55,8 +55,10 @@ class LatencyPredictorTTS(LatencyPredictor):
         batch_size, seq_len = y_drops.size()
         y_drops_conv = y_drops.unsqueeze(1).float()
 
+        # NEW: Sharper decay so neighbors are at most 0.5
+        # Example for window_size=5: [0.0, 0.5, 1.0, 0.5, 0.0]
         center = window_size // 2
-        kernel = torch.tensor([1.0 - (abs(i - center) / (center + 1)) for i in range(window_size)])
+        kernel = torch.tensor([max(0.0, 1.0 - abs(i - center) * 0.5) for i in range(window_size)])
         kernel = kernel.view(1, 1, -1).to(y_drops.device)
 
         smeared_targets = F.conv1d(y_drops_conv, kernel, padding=center)
@@ -161,7 +163,8 @@ class LatencyPredictorTTS(LatencyPredictor):
                                                                         window_size=self.tts_window_size)
                         tts_loss = torch.mean(torch.abs(dropped_target_smeared - dropped_pred_binary))
 
-                        loss = backlog_loss + dropped_loss + tts_loss
+                        #loss = backlog_loss + dropped_loss + tts_loss
+                        loss = backlog_loss + droprate_loss + tts_loss
 
                         train_loss += loss.item()
                         train_backlog_loss += backlog_loss.item()
@@ -231,7 +234,8 @@ class LatencyPredictorTTS(LatencyPredictor):
                                                                         window_size=self.tts_window_size)
                     val_tts_loss_step = torch.mean(torch.abs(dropped_target_val_smeared - dropped_pred_val_prob))
 
-                    val_loss += (val_backlog_loss + val_tts_loss_step).item()
+                    #val_loss += (val_backlog_loss + val_tts_loss_step).item()
+                    val_loss += (val_backlog_loss + val_droprate_loss + val_tts_loss_step).item()
                     v_backlog_loss += val_backlog_loss.item()
                     v_dropped_loss += val_dropped_loss.item()
                     v_droprate_loss += val_droprate_loss.item()
