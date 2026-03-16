@@ -10,6 +10,7 @@ from DropLSTM import DropLSTM
 from DropLSTMAR import DropLSTMAR
 from DropReluLSTM import DropReluLSTM
 from LatencyPredictorEarthmoverAR import LatencyPredictorEarthmoverAR
+from LatencyPredictorTTS import LatencyPredictorTTS
 from LinkEmuModel import LinkEmuModel
 from LinkProperties import link_properties_library
 from NonManualRNN import NonManualRNN
@@ -72,6 +73,7 @@ def main():
     parser.add_argument('--packetqueue', action='store_true')
     parser.add_argument('--energy', action='store_true')
     parser.add_argument('--earthmover', action='store_true')
+    parser.add_argument('--tts', action='store_true')
     parser.add_argument('--tanh', action='store_true')
     parser.add_argument('--relu_lstm', action='store_true')
     parser.add_argument('--lstm', action='store_true')
@@ -107,6 +109,7 @@ def main():
     packetqueue = args.packetqueue
     energy = args.energy
     earthmover = args.earthmover
+    temporal_target_smearing = args.tts
     use_relu_lstm = args.relu_lstm
     use_lstm = args.lstm
     use_gru = args.gru
@@ -222,6 +225,8 @@ def main():
             'kilo_test_samples':    kilo_test_samples,
             'multiloader':      multiloader,
             'autoregressive':   autoregressive,
+            'earthmover':       earthmover,
+            'temporal_target_smearing': temporal_target_smearing,
             'use_deltas':       use_deltas,
             'seq_len':          seq_len,
             'tb_chunk_size':    tb_chunk_size,
@@ -233,7 +238,10 @@ def main():
         wandb_run = setup_wandb(wandb_cfg)
         wandb.watch(model)
 
-    if earthmover:
+    if temporal_target_smearing:
+        latency_predictor = LatencyPredictorTTS(model, trace_generator=trace_generator, seed=torch_seed,
+                                                drop_masking=drop_masking, wandb_run=wandb_run, tb_chunk_size=tb_chunk_size)
+    elif earthmover:
         if autoregressive:
             latency_predictor = LatencyPredictorEarthmoverAR(model, trace_generator=trace_generator, seed=torch_seed, drop_masking=drop_masking, wandb_run=wandb_run, use_deltas=use_deltas)
         else:
