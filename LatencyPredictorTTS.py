@@ -156,7 +156,7 @@ class LatencyPredictorTTS(LatencyPredictor):
                         dropped_loss = criterion_dropped(dropped_pred.view(-1, 2), dropped_target.view(-1))
 
                         droprate_loss = torch.mean(
-                            torch.abs(torch.sum(y_chunk[:, :, 1], dim=1) - torch.sum(dropped_pred_binary, dim=1)))
+                            torch.abs(torch.mean(y_chunk[:, :, 1], dim=1) - torch.mean(dropped_pred_binary, dim=1)))
 
                         # --- TEMPORAL TARGET SMEARING (TTS) ---
                         dropped_target_smeared = self.get_smeared_drops(y_chunk[:, :, 1].float(),
@@ -227,7 +227,7 @@ class LatencyPredictorTTS(LatencyPredictor):
                     val_dropped_loss = criterion_dropped(dropped_pred_val.view(-1, 2), dropped_target_val.view(-1))
 
                     val_droprate_loss = torch.mean(
-                        torch.abs(torch.sum(y_val[:, :, 1], dim=1) - torch.sum(dropped_pred_val_binary, dim=1)))
+                        torch.abs(torch.mean(y_val[:, :, 1], dim=1) - torch.mean(dropped_pred_val_binary, dim=1)))
 
                     # Compute TTS for Validation instead of EMD
                     dropped_target_val_smeared = self.get_smeared_drops(y_val[:, :, 1].float(),
