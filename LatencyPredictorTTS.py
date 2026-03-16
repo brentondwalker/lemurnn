@@ -85,7 +85,7 @@ class LatencyPredictorTTS(LatencyPredictor):
             self.model.optimizer,
             mode='min',
             factor=0.5,
-            patience=15,
+            patience=150,
             min_lr=1e-6
         )
 
@@ -150,7 +150,7 @@ class LatencyPredictorTTS(LatencyPredictor):
                         backlog_target = y_chunk[:, :, 0].unsqueeze(-1)
                         dropped_target = y_chunk[:, :, 1].long()
 
-                        dropped_pred_binary = torch.softmax(dropped_pred, dim=2)[:, :, 1]
+                        dropped_pred_prob = torch.softmax(dropped_pred, dim=2)[:, :, 1]
 
                         if self.drop_masking:
                             backlog_target = backlog_target * (1 - dropped_target.unsqueeze(dim=-1))
@@ -160,19 +160,25 @@ class LatencyPredictorTTS(LatencyPredictor):
                         dropped_loss = criterion_dropped(dropped_pred.view(-1, 2), dropped_target.view(-1))
 
                         droprate_loss = torch.mean(
-                            torch.abs(torch.mean(y_chunk[:, :, 1].float(), dim=1) - torch.mean(dropped_pred_binary.float(),dim=1)))
+                            torch.abs(torch.mean(y_chunk[:, :, 1].float(), dim=1) - torch.mean(dropped_pred_prob.float(),dim=1)))
 
                         # --- TEMPORAL TARGET SMEARING (TTS) ---
                         #dropped_target_smeared = self.get_smeared_drops(y_chunk[:, :, 1].float(), window_size=self.tts_window_size)
                         #tts_loss = torch.mean(torch.abs(dropped_target_smeared - dropped_pred_binary))
                         # steep logarithmic gradients!
                         dropped_target_smeared = self.get_smeared_drops(y_chunk[:, :, 1].float(), window_size=self.tts_window_size)
+                        pos_weight = 50.0
+                        weight_mask = torch.where(dropped_target_smeared > 0.0, pos_weight, 1.0).to(self.device)
                         # Note: BCE expects both inputs to be probabilities between 0 and 1
-                        tts_loss = criterion_tts_bce(dropped_pred_binary, dropped_target_smeared)
+                        #tts_loss = criterion_tts_bce(dropped_pred_prob, dropped_target_smeared)
+                        # weighted BCE
+                        tts_loss = F.binary_cross_entropy(dropped_pred_prob, dropped_target_smeared, weight=weight_mask, reduction='mean')
+
 
                         #loss = backlog_loss + dropped_loss + tts_loss
                         #loss = backlog_loss + droprate_loss + tts_loss
-                        loss = (weight_backlog * backlog_loss) + (weight_tts * tts_loss) + (weight_droprate * droprate_loss)
+                        #loss = (weight_backlog * backlog_loss) + (weight_tts * tts_loss) + (weight_droprate * droprate_loss)
+                        loss = (weight_backlog * backlog_loss) + (weight_tts * tts_loss)
 
                         train_loss += loss.item()
                         train_backlog_loss += backlog_loss.item()
@@ -241,12 +247,21 @@ class LatencyPredictorTTS(LatencyPredictor):
                     #dropped_target_val_smeared = self.get_smeared_drops(y_val[:, :, 1].float(), window_size=self.tts_window_size)
                     #val_tts_loss_step = torch.mean(torch.abs(dropped_target_val_smeared - dropped_pred_val_prob))
                     dropped_target_val_smeared = self.get_smeared_drops(y_val[:, :, 1].float(), window_size=self.tts_window_size)
+
+                    pos_weight = 50.0
+                    dropped_target_val_smeared = self.get_smeared_drops(y_val[:, :, 1].float(), window_size=self.tts_window_size)
+                    weight_mask = torch.where(dropped_target_val_smeared > 0.0, pos_weight, 1.0).to(self.device)
+
                     # Note: BCE expects both inputs to be probabilities between 0 and 1
-                    val_tts_loss_step = criterion_tts_bce(dropped_pred_val_prob, dropped_target_val_smeared)
+                    #val_tts_loss_step = criterion_tts_bce(dropped_pred_val_prob, dropped_target_val_smeared)
+                    # weighted BCE
+                    val_tts_loss_step = F.binary_cross_entropy(dropped_pred_val_prob, dropped_target_val_smeared, weight=weight_mask, reduction='mean')
+
 
                     #val_loss += (val_backlog_loss + val_tts_loss_step).item()
                     #val_loss += (val_backlog_loss + val_droprate_loss + val_tts_loss_step).item()
-                    val_loss = ((weight_backlog * val_backlog_loss) + (weight_tts * val_tts_loss_step) + (weight_droprate * val_droprate_loss)).item()
+                    #val_loss = ((weight_backlog * val_backlog_loss) + (weight_tts * val_tts_loss_step) + (weight_droprate * val_droprate_loss)).item()
+                    val_loss = ((weight_backlog * val_backlog_loss) + (weight_tts * val_tts_loss_step)).item()
 
                     v_backlog_loss += val_backlog_loss.item()
                     v_dropped_loss += val_dropped_loss.item()
@@ -341,8 +356,12 @@ class LatencyPredictorTTS(LatencyPredictor):
                             #dropped_target_test_smeared = self.get_smeared_drops(y_test[:, :, 1].float(), window_size=self.tts_window_size)
                             #tp_tts_loss += torch.mean(torch.abs(dropped_target_test_smeared - dropped_pred_test_prob)).item()
                             dropped_target_test_smeared = self.get_smeared_drops(y_test[:, :, 1].float(), window_size=self.tts_window_size)
+                            pos_weight = 50.0
+                            weight_mask = torch.where(dropped_target_test_smeared > 0.0, pos_weight, 1.0).to(self.device)
                             # Note: BCE expects both inputs to be probabilities between 0 and 1
-                            tp_tts_loss = criterion_tts_bce(dropped_target_test_smeared, dropped_pred_test_prob).item()
+                            #tp_tts_loss = criterion_tts_bce(dropped_target_test_smeared, dropped_pred_test_prob).item()
+                            # weighted BCE
+                            tp_tts_loss = F.binary_cross_entropy(dropped_pred_test_prob, dropped_target_test_smeared, weight=weight_mask, reduction='mean').item()
 
                             if ads_loss_interval > 0 and ads_new_model and (self.epoch % ads_loss_interval) == 0:
                                 for i in range(batch_size_test):
@@ -377,7 +396,7 @@ class LatencyPredictorTTS(LatencyPredictor):
 
                         # Use TTS for the final reported test_loss
                         test_p_loss = tp_backlog_loss + tp_tts_loss
-                        test_p_loss = (weight_backlog * tp_backlog_loss) + (weight_tts * tp_tts_loss) + (weight_droprate * tp_droprate_loss)
+                        test_p_loss = (weight_backlog * tp_backlog_loss) + (weight_tts * tp_tts_loss)
                         test_set_losses[test_dataset_name] = {
                             'total_loss': test_p_loss, 'backlog_loss': tp_backlog_loss,
                             'dropped_loss': tp_dropped_loss, 'em1_loss': tp_dropped_em1_loss,
