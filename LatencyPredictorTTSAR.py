@@ -28,13 +28,14 @@ class LatencyPredictorTTSAR(LatencyPredictor):
     def __init__(self, model: LinkEmuModel, trace_generator: TraceGenerator,
                  device=None, seed=None, loadpath=None, track_grad=False,
                  drop_masking=False, wandb_run=None, use_deltas=False, tb_chunk_size=None,
-                 tts_window=15):
+                 tts_window=15, burnin_fraction=0.0):
         """
         Use Temporal Target Smearing as a metric to compare drop predictions.
         """
         self.earthmover_p = 1
         self.tts_window_size =  tts_window # The smearing window for TTS
         self.use_deltas = use_deltas
+        self.burnin_fraction = burnin_fraction
         super().__init__(model, trace_generator, device=device, seed=seed, loadpath=loadpath, track_grad=track_grad,
                          drop_masking=drop_masking, wandb_run=wandb_run, tb_chunk_size=tb_chunk_size)
 
@@ -78,8 +79,7 @@ class LatencyPredictorTTSAR(LatencyPredictor):
         training_history_filename = f"{self.training_directory}/training_history.json"
 
         # train fast (teacher-forcing) for 80% of the epochs
-        #burn_in_epochs = int(n_epochs * 0.8)
-        burn_in_epochs = 0
+        burn_in_epochs = int(n_epochs * self.burnin_fraction)
 
         #self.optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
         criterion_backlog = nn.L1Loss()

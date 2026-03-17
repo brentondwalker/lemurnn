@@ -75,6 +75,7 @@ def main():
     parser.add_argument('--energy', action='store_true')
     parser.add_argument('--earthmover', action='store_true')
     parser.add_argument('--tts', action='store_true')
+    parser.add_argument('--burnin_fraction', type=float, default=0.0)
     parser.add_argument('--tanh', action='store_true')
     parser.add_argument('--relu_lstm', action='store_true')
     parser.add_argument('--lstm', action='store_true')
@@ -111,6 +112,7 @@ def main():
     energy = args.energy
     earthmover = args.earthmover
     temporal_target_smearing = args.tts
+    burnin_fraction = args.burnin_fraction
     use_relu_lstm = args.relu_lstm
     use_lstm = args.lstm
     use_gru = args.gru
@@ -242,15 +244,18 @@ def main():
     if temporal_target_smearing:
         if autoregressive:
             latency_predictor = LatencyPredictorTTSAR(model, trace_generator=trace_generator, seed=torch_seed,
-                                                      drop_masking=drop_masking, wandb_run=wandb_run, use_deltas=use_deltas, tb_chunk_size=tb_chunk_size)
+                                                      drop_masking=drop_masking, wandb_run=wandb_run, use_deltas=use_deltas,
+                                                      tb_chunk_size=tb_chunk_size, burnin_fraction=burnin_fraction)
         else:
             latency_predictor = LatencyPredictorTTS(model, trace_generator=trace_generator, seed=torch_seed,
                                                     drop_masking=drop_masking, wandb_run=wandb_run, tb_chunk_size=tb_chunk_size)
     elif earthmover:
         if autoregressive:
-            latency_predictor = LatencyPredictorEarthmoverAR(model, trace_generator=trace_generator, seed=torch_seed, drop_masking=drop_masking, wandb_run=wandb_run, use_deltas=use_deltas, tb_chunk_size=tb_chunk_size)
+            latency_predictor = LatencyPredictorEarthmoverAR(model, trace_generator=trace_generator, seed=torch_seed,
+                                                             drop_masking=drop_masking, wandb_run=wandb_run, use_deltas=use_deltas, tb_chunk_size=tb_chunk_size)
         else:
-            latency_predictor = LatencyPredictorEarthmover(model, trace_generator=trace_generator, seed=torch_seed, drop_masking=drop_masking, wandb_run=wandb_run, tb_chunk_size=tb_chunk_size)
+            latency_predictor = LatencyPredictorEarthmover(model, trace_generator=trace_generator, seed=torch_seed,
+                                                           drop_masking=drop_masking, wandb_run=wandb_run, tb_chunk_size=tb_chunk_size)
     elif energy:
         latency_predictor = LatencyPredictorEnergy(model, trace_generator=trace_generator, seed=torch_seed)
     else:
