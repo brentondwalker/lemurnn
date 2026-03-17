@@ -35,6 +35,37 @@ class DropGRUAR(LinkEmuModelAR):
         batch_size, seq_len, _ = x.size()
         device = x.device
 
+        # ---------------------------------------------------------
+        # FAST PATH: 100% Teacher Forcing (Parallelized)
+        # ---------------------------------------------------------
+        if ar_x is not None and teacher_forcing_ratio == 1.0:
+            # 1. Feed the entire sequence to the GRU at once
+            gru_input = torch.cat([x, ar_x], dim=-1)
+            out, hidden = self.gru(gru_input, hidden)
+
+            if self.dropout_rate > 0:
+                out = self.dropout(out)
+
+            combined_out = self.fc(out)
+
+            # 2. Extract predictions across the whole sequence
+            pred_delta = combined_out[:, :, 0:1]
+            dropped_out = combined_out[:, :, 1:3]
+
+            # 3. Vectorized Residual Connection
+            # ar_x[:, :, 1:2] contains the ground-truth *previous* cumulative backlog
+            # for the entire sequence. We just add our predicted deltas to it.
+            prev_cumulative_true = ar_x[:, :, 1:2]
+            curr_cumulative = prev_cumulative_true + pred_delta
+
+            # 4. Apply physics constraint across the whole tensor
+            backlog_out = torch.relu(curr_cumulative)
+
+            return backlog_out, dropped_out, hidden
+
+        # ---------------------------------------------------------
+        # SLOW PATH: Autoregressive Loop / Scheduled Sampling
+        # ---------------------------------------------------------
         backlog_outputs = []
         dropped_outputs = []
 

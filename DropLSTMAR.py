@@ -34,6 +34,35 @@ class DropLSTMAR(LinkEmuModelAR):
         batch_size, seq_len, _ = x.size()
         device = x.device
 
+        # ---------------------------------------------------------
+        # FAST PATH: 100% Teacher Forcing (Parallelized)
+        # ---------------------------------------------------------
+        if ar_x is not None and teacher_forcing_ratio == 1.0:
+            lstm_input = torch.cat([x, ar_x], dim=-1)
+
+            # For LSTM, 'hidden' is a tuple of (h_n, c_n)
+            out, hidden = self.lstm(lstm_input, hidden)
+
+            if self.dropout_rate > 0:
+                out = self.dropout(out)
+
+            combined_out = self.fc(out)
+
+            pred_delta = combined_out[:, :, 0:1]
+            dropped_out = combined_out[:, :, 1:3]
+
+            # Vectorized Residual Connection
+            prev_cumulative_true = ar_x[:, :, 1:2]
+            curr_cumulative = prev_cumulative_true + pred_delta
+
+            # Physics Constraint
+            backlog_out = torch.relu(curr_cumulative)
+
+            return backlog_out, dropped_out, hidden
+
+        # ---------------------------------------------------------
+        # SLOW PATH: Autoregressive Loop / Scheduled Sampling
+        # ---------------------------------------------------------
         backlog_outputs = []
         dropped_outputs = []
 
@@ -44,7 +73,6 @@ class DropLSTMAR(LinkEmuModelAR):
             curr_x = x[:, t:t + 1, :]
             lstm_input = torch.cat([curr_x, curr_ar_input], dim=-1)
 
-            # The 'hidden' tuple gets overwritten with the new (h_t, c_t) tuple at each step
             out, hidden = self.lstm(lstm_input, hidden)
 
             if self.dropout_rate > 0:

@@ -34,7 +34,35 @@ class NonManualRNNAR(LinkEmuModelAR):
         batch_size, seq_len, _ = x.size()
         device = x.device
 
-        ###print(f"forward_deltas()  ar_x: {ar_x.shape}")
+        # ---------------------------------------------------------
+        # FAST PATH: 100% Teacher Forcing (Parallelized)
+        # ---------------------------------------------------------
+        if ar_x is not None and teacher_forcing_ratio == 1.0:
+            # 1. Feed the entire sequence to the RNN at once
+            rnn_input = torch.cat([x, ar_x], dim=-1)
+            out, hidden = self.rnn(rnn_input, hidden)
+
+            if self.dropout_rate > 0:
+                out = self.dropout(out)
+
+            combined_out = self.fc(out)
+
+            # 2. Extract predictions
+            pred_delta = combined_out[:, :, 0:1]
+            dropped_out = combined_out[:, :, 1:3]
+
+            # 3. Vectorized Residual Connection
+            prev_cumulative_true = ar_x[:, :, 1:2]
+            curr_cumulative = prev_cumulative_true + pred_delta
+
+            # 4. Physics constraint
+            backlog_out = torch.relu(curr_cumulative)
+
+            return backlog_out, dropped_out, hidden
+
+        # ---------------------------------------------------------
+        # SLOW PATH: Autoregressive Loop / Scheduled Sampling
+        # ---------------------------------------------------------
         backlog_outputs = []
         dropped_outputs = []
 
@@ -47,9 +75,13 @@ class NonManualRNNAR(LinkEmuModelAR):
         for t in range(seq_len):
             curr_x = x[:, t:t + 1, :]
             rnn_input = torch.cat([curr_x, curr_ar_input], dim=-1)
-            ###print(f"curr_x: {curr_x.shape}\t curr_ar_input: {curr_ar_input.shape}\t rnn_input: {rnn_input.shape}")
 
             out, hidden = self.rnn(rnn_input, hidden)
+
+            # (Added dropout here to match fast-path behavior if configured)
+            if self.dropout_rate > 0:
+                out = self.dropout(out)
+
             combined_out = self.fc(out)
 
             # The model predicts the DELTA, not the absolute value!
@@ -58,11 +90,8 @@ class NonManualRNNAR(LinkEmuModelAR):
 
             # --- THE RESIDUAL CONNECTION ---
             if ar_x is not None and teacher_forcing_ratio == 1.0:
-                # In 100% Teacher Forcing, we trust the ground-truth previous cumulative from ar_x
-                # Assuming ar_x feature index 1 is the cumulative backlog
                 curr_cumulative = ar_x[:, t:t + 1, 1:2] + pred_delta
             else:
-                # In inference/slow path, we add the predicted delta to our running total
                 curr_cumulative = prev_cumulative + pred_delta
 
             # Physics constraint: Backlog cannot be negative.
@@ -78,17 +107,9 @@ class NonManualRNNAR(LinkEmuModelAR):
                 curr_ar_input = ar_x[:, t:t + 1, :]
                 prev_cumulative = ar_x[:, t:t + 1, 1:2]  # Update our tracker for the next step
             else:
-                # ---------------------------------------------------------
-                # THE FIX: Always use Hard 1-Hot for Autoregressive Feedback
-                # ---------------------------------------------------------
-                # Whether training or evaluating, the model must see the exact
-                # same binary state transitions it will see in production.
                 dropped_idx = torch.argmax(dropped_t, dim=-1, keepdim=True)
                 hard_drop_pred = torch.zeros_like(dropped_t).scatter_(-1, dropped_idx, 1.0)
 
-                # We detach the entire AR input to prevent BPTT from looping back
-                # through the inputs, which causes exploding gradients. The loss
-                # function will still handle the gradients for the drop accuracy!
                 curr_ar_input = torch.cat([pred_delta, curr_cumulative, hard_drop_pred], dim=-1).detach()
                 prev_cumulative = curr_cumulative.detach()
 
@@ -97,7 +118,6 @@ class NonManualRNNAR(LinkEmuModelAR):
         dropped_out = torch.cat(dropped_outputs, dim=1)
 
         return backlog_out, dropped_out, hidden
-
 
     def forward_std(self, x, hidden, ar_x=None, teacher_forcing_ratio=0.0):
         """
