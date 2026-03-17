@@ -97,7 +97,7 @@ class LatencyPredictorTTSAR(LatencyPredictor):
             self.model.optimizer,
             mode='min',  # We want the validation loss to minimize
             factor=0.5,  # Halve the learning rate (multiply by 0.5) when stuck
-            patience=15,  # Wait 15 epochs of no improvement before dropping the LR
+            patience=150,  # Wait 15 epochs of no improvement before dropping the LR
             min_lr=1e-6  # Never drop the learning rate below this floor
         )
 
