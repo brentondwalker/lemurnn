@@ -11,6 +11,7 @@ from DropLSTMAR import DropLSTMAR
 from DropReluLSTM import DropReluLSTM
 from LatencyPredictorEarthmoverAR import LatencyPredictorEarthmoverAR
 from LatencyPredictorTTS import LatencyPredictorTTS
+from LatencyPredictorTTSAR import LatencyPredictorTTSAR
 from LinkEmuModel import LinkEmuModel
 from LinkProperties import link_properties_library
 from NonManualRNN import NonManualRNN
@@ -239,11 +240,15 @@ def main():
         wandb.watch(model)
 
     if temporal_target_smearing:
-        latency_predictor = LatencyPredictorTTS(model, trace_generator=trace_generator, seed=torch_seed,
-                                                drop_masking=drop_masking, wandb_run=wandb_run, tb_chunk_size=tb_chunk_size)
+        if autoregressive:
+            latency_predictor = LatencyPredictorTTSAR(model, trace_generator=trace_generator, seed=torch_seed,
+                                                      drop_masking=drop_masking, wandb_run=wandb_run, use_deltas=use_deltas, tb_chunk_size=tb_chunk_size)
+        else:
+            latency_predictor = LatencyPredictorTTS(model, trace_generator=trace_generator, seed=torch_seed,
+                                                    drop_masking=drop_masking, wandb_run=wandb_run, tb_chunk_size=tb_chunk_size)
     elif earthmover:
         if autoregressive:
-            latency_predictor = LatencyPredictorEarthmoverAR(model, trace_generator=trace_generator, seed=torch_seed, drop_masking=drop_masking, wandb_run=wandb_run, use_deltas=use_deltas)
+            latency_predictor = LatencyPredictorEarthmoverAR(model, trace_generator=trace_generator, seed=torch_seed, drop_masking=drop_masking, wandb_run=wandb_run, use_deltas=use_deltas, tb_chunk_size=tb_chunk_size)
         else:
             latency_predictor = LatencyPredictorEarthmover(model, trace_generator=trace_generator, seed=torch_seed, drop_masking=drop_masking, wandb_run=wandb_run, tb_chunk_size=tb_chunk_size)
     elif energy:
